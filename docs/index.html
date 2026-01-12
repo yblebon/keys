@@ -32,7 +32,7 @@
         input, textarea { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; outline: none; }
         
         .strength-container { height: 4px; background: #e2e8f0; border-radius: 2px; margin: 8px 0; overflow: hidden; }
-        #strength-bar { height: 100%; width: 0%; transition: 0.4s; }
+        .strength-bar { height: 100%; width: 0%; transition: 0.4s; }
 
         .entry-item { padding: 15px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; background: white; }
         .secret-area { margin-top: 12px; padding: 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; font-family: monospace; font-size: 0.85rem; word-break: break-all; color: #c2410c; display: none; }
@@ -72,9 +72,9 @@
         <div id="auth-new">
             <div class="input-group">
                 <label>Master Key</label>
-                <input type="password" id="new-key" oninput="checkStrength()" placeholder="Strong passphrase">
-                <div class="strength-container"><div id="strength-bar"></div></div>
-                <p id="strength-text" style="font-size: 0.7rem; color: var(--text-muted);">Strength: None</p>
+                <input type="password" id="new-key" oninput="checkStrength('new-key', 'strength-bar-init', 'strength-text-init')" placeholder="Strong passphrase">
+                <div class="strength-container"><div id="strength-bar-init" class="strength-bar"></div></div>
+                <p id="strength-text-init" style="font-size: 0.7rem; color: var(--text-muted);">Strength: None</p>
             </div>
             <div class="input-group">
                 <label>Confirm Master Key</label>
@@ -84,7 +84,7 @@
         </div>
 
         <div id="auth-restore" style="display:none">
-            <div class="upload-zone" onclick="document.getElementById('file-input').click()">
+            <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
                 <span id="file-label">Select vault_backup.json</span>
                 <input type="file" id="file-input" style="display:none" onchange="stageFile(this)">
             </div>
@@ -101,34 +101,57 @@
             <div class="tab active" onclick="switchTab('passwords')">Passwords</div>
             <div class="tab" onclick="switchTab('keys')">Keys</div>
             <div class="tab" onclick="switchTab('certs')">Certs</div>
+            <div class="tab" onclick="switchTab('security')" style="color: var(--danger)">Security</div>
         </div>
 
-        <input type="text" id="v-search" class="search-box" placeholder="Filter assets..." oninput="renderList()">
+        <div id="vault-content-section">
+            <input type="text" id="v-search" class="search-box" placeholder="Filter assets..." oninput="renderList()">
 
-        <div class="entry-form">
-            <div id="file-content-section" style="display:none">
-                <div class="upload-zone" onclick="document.getElementById('content-uploader').click()">
-                    Click to import .key, .pub, or .crt file content
-                    <input type="file" id="content-uploader" style="display:none" onchange="importContent(this)">
+            <div class="entry-form">
+                <div id="file-content-section" style="display:none">
+                    <div class="upload-zone" onclick="document.getElementById('content-uploader').click()">
+                        Click to import file content
+                        <input type="file" id="content-uploader" style="display:none" onchange="importContent(this)">
+                    </div>
                 </div>
+
+                <div class="form-header" style="display:flex; justify-content:space-between; margin-bottom: 10px;">
+                    <label style="margin:0">Add Infrastructure Asset</label>
+                    <button id="gen-btn" class="btn btn-purple" style="padding:4px 10px; font-size:0.75rem" onclick="generate()">Generate Password</button>
+                </div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px">
+                    <input type="text" id="n-name" placeholder="Name">
+                    <input type="text" id="n-tag" placeholder="Tag">
+                </div>
+                <div id="login-field" style="margin-top:10px">
+                    <input type="text" id="n-login" placeholder="Username/Login">
+                </div>
+                <textarea id="n-content" style="margin-top:10px; height:80px" placeholder="Secret content..."></textarea>
+                <button id="add-btn" class="btn btn-accent" style="width:100%; margin-top:10px" onclick="addEntry()">Add & Auto-Encrypt</button>
             </div>
 
-            <div class="form-header" style="display:flex; justify-content:space-between; margin-bottom: 10px;">
-                <label style="margin:0">Add Infrastructure Asset</label>
-                <button id="gen-btn" class="btn btn-purple" style="padding:4px 10px; font-size:0.75rem" onclick="generate()">Generate Password</button>
-            </div>
-            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px">
-                <input type="text" id="n-name" placeholder="Name">
-                <input type="text" id="n-tag" placeholder="Tag">
-            </div>
-            <div id="login-field" style="margin-top:10px">
-                <input type="text" id="n-login" placeholder="Username/Login">
-            </div>
-            <textarea id="n-content" style="margin-top:10px; height:80px" placeholder="Secret content..."></textarea>
-            <button id="add-btn" class="btn btn-accent" style="width:100%; margin-top:10px" onclick="addEntry()">Add & Auto-Encrypt</button>
+            <div id="list-container"></div>
         </div>
 
-        <div id="list-container"></div>
+        <div id="security-section" style="display:none">
+            <h3 style="margin-bottom: 15px;">Change Master Password</h3>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">
+                Changing your password will re-encrypt all stored assets with a new key. 
+                <b>Download a new backup immediately after this process.</b>
+            </p>
+            <div class="input-group">
+                <label>New Master Password</label>
+                <input type="password" id="change-pass-new" oninput="checkStrength('change-pass-new', 'strength-bar-change', 'strength-text-change')" placeholder="New passphrase">
+                <div class="strength-container"><div id="strength-bar-change" class="strength-bar"></div></div>
+                <p id="strength-text-change" style="font-size: 0.7rem; color: var(--text-muted);">Strength: None</p>
+            </div>
+            <div class="input-group">
+                <label>Confirm New Password</label>
+                <input type="password" id="change-pass-confirm" placeholder="Repeat new passphrase">
+            </div>
+            <button id="change-pass-btn" class="btn btn-danger" style="width:100%" onclick="handleChangePassword()">Update & Re-encrypt Vault</button>
+        </div>
+        
         <div style="margin-top:30px; border-top:1px solid var(--border); padding-top:20px; display:flex; gap:10px">
             <button class="btn" style="flex:1; background:#f1f5f9; color:#475569" onclick="downloadBackup()">Download Backup JSON</button>
             <button class="btn btn-danger" onclick="lock()">Lock Vault</button>
@@ -175,10 +198,10 @@
         document.querySelectorAll('#auth-tabs .tab').forEach((t, i) => t.classList.toggle('active', (m==='new' && i===0) || (m==='restore' && i===1)));
     }
 
-    function checkStrength() {
-        const p = document.getElementById('new-key').value;
-        const b = document.getElementById('strength-bar');
-        const t = document.getElementById('strength-text');
+    function checkStrength(inputId, barId, textId) {
+        const p = document.getElementById(inputId).value;
+        const b = document.getElementById(barId);
+        const t = document.getElementById(textId);
         let s = 0;
         if(p.length > 8) s++; if(/[A-Z]/.test(p)) s++; if(/[0-9]/.test(p)) s++; if(/[^A-Za-z0-9]/.test(p)) s++;
         const c = ['#ef4444', '#f59e0b', '#3b82f6', '#10b981'];
@@ -215,7 +238,7 @@
         } catch (e) { alert("Fail."); }
     }
 
-    // --- VAULT ---
+    // --- VAULT & TABS ---
     function openVault() {
         document.getElementById('auth-view').style.display = 'none';
         document.getElementById('vault-view').style.display = 'block';
@@ -225,11 +248,48 @@
 
     function switchTab(t) {
         activeTab = t;
-        document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.innerText.toLowerCase().includes(t.substring(0,3))));
-        document.getElementById('login-field').style.display = t === 'passwords' ? 'block' : 'none';
-        document.getElementById('gen-btn').style.display = t === 'passwords' ? 'block' : 'none';
-        document.getElementById('file-content-section').style.display = t === 'passwords' ? 'none' : 'block';
-        renderList();
+        document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.innerText.toLowerCase() === t.toLowerCase()));
+        
+        const contentSection = document.getElementById('vault-content-section');
+        const securitySection = document.getElementById('security-section');
+
+        if(t === 'security') {
+            contentSection.style.display = 'none';
+            securitySection.style.display = 'block';
+        } else {
+            contentSection.style.display = 'block';
+            securitySection.style.display = 'none';
+            document.getElementById('login-field').style.display = t === 'passwords' ? 'block' : 'none';
+            document.getElementById('gen-btn').style.display = t === 'passwords' ? 'block' : 'none';
+            document.getElementById('file-content-section').style.display = t === 'passwords' ? 'none' : 'block';
+            renderList();
+        }
+    }
+
+    // --- PASSWORD CHANGE LOGIC ---
+    async function handleChangePassword() {
+        const n1 = document.getElementById('change-pass-new').value;
+        const n2 = document.getElementById('change-pass-confirm').value;
+        const btn = document.getElementById('change-pass-btn');
+
+        if(n1 !== n2 || n1.length < 8) return alert("Passwords mismatch or too weak.");
+        
+        btn.disabled = true;
+        btn.innerText = "Re-encrypting Vault (Argon2id)...";
+
+        // Logic: Update the currentKey and run autoSave
+        // Since vaultData is already decrypted in memory, we just encrypt with new key
+        currentKey = n1;
+        await autoSave();
+
+        alert("Master password updated successfully. Your vault is now re-encrypted.");
+        btn.disabled = false;
+        btn.innerText = "Update & Re-encrypt Vault";
+        
+        // Clear fields
+        document.getElementById('change-pass-new').value = "";
+        document.getElementById('change-pass-confirm').value = "";
+        checkStrength('change-pass-new', 'strength-bar-change', 'strength-text-change');
     }
 
     function importContent(input) {
@@ -245,6 +305,8 @@
         const container = document.getElementById('list-container');
         const query = document.getElementById('v-search').value.toLowerCase();
         container.innerHTML = '';
+        if(!vaultData[activeTab]) return;
+
         vaultData[activeTab].filter(e => e.name.toLowerCase().includes(query) || (e.tag && e.tag.toLowerCase().includes(query)))
         .forEach(e => {
             const div = document.createElement('div'); div.className = 'entry-item';
