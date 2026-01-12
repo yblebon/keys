@@ -25,47 +25,176 @@
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; }
         body { display: flex; min-height: 100vh; background-color: var(--bg-light); color: var(--text-main); }
         
-        #sync-banner { display: none; position: fixed; top: 0; width: 100%; background: #fff7ed; border-bottom: 1px solid #fed7aa; padding: 12px; text-align: center; font-size: 0.85rem; color: #9a3412; font-weight: 600; z-index: 1000; }
+        #sync-banner { 
+            display: none; 
+            position: fixed; 
+            top: 0; 
+            width: 100%; 
+            background: #fff7ed; 
+            border-bottom: 1px solid #fed7aa; 
+            padding: 12px; 
+            text-align: center; 
+            font-size: 0.85rem; 
+            color: #9a3412; 
+            font-weight: 600; 
+            z-index: 1000; 
+        }
         
-        .sidebar { flex: 0 0 300px; background-color: var(--bg-dark); color: white; padding: 40px; height: 100vh; position: sticky; top: 0; }
+        .sidebar { 
+            flex: 0 0 300px; 
+            background-color: var(--bg-dark); 
+            color: white; 
+            padding: 40px; 
+            height: 100vh; 
+            position: sticky; 
+            top: 0; 
+        }
         .sidebar h1 { font-size: 2.2rem; margin-bottom: 10px; }
+        .version-tag { 
+            font-size: 0.7rem; 
+            color: #94a3b8; 
+            background: #1e293b; 
+            padding: 4px 10px; 
+            border-radius: 12px; 
+            margin-top: 5px; 
+            display: inline-block; 
+            border: 1px solid #334155; 
+        }
         
-        .content-area { flex: 1; display: flex; justify-content: center; padding: 60px 20px; overflow-y: auto; }
-        .card { width: 100%; max-width: 650px; background: white; padding: 30px; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .content-area { 
+            flex: 1; 
+            display: flex; 
+            justify-content: center; 
+            padding: 60px 20px; 
+            overflow-y: auto; 
+        }
+        .card { 
+            width: 100%; 
+            max-width: 650px; 
+            background: white; 
+            padding: 30px; 
+            border-radius: 12px; 
+            border: 1px solid var(--border); 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05); 
+        }
         
-        .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 20px; gap: 15px; }
-        .tab { padding: 8px 0; cursor: pointer; color: var(--text-muted); font-weight: 600; border-bottom: 2px solid transparent; transition: 0.2s; text-transform: capitalize; }
-        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+        .tabs { 
+            display: flex; 
+            border-bottom: 1px solid var(--border); 
+            margin-bottom: 20px; 
+            gap: 15px; 
+        }
+        .tab { 
+            padding: 8px 0; 
+            cursor: pointer; 
+            color: var(--text-muted); 
+            font-weight: 600; 
+            border-bottom: 2px solid transparent; 
+            transition: 0.2s; 
+            text-transform: capitalize; 
+        }
+        .tab.active { 
+            color: var(--accent); 
+            border-bottom-color: var(--accent); 
+        }
         
-        .input-group { margin-bottom: 15px; position: relative; }
-        label { display: block; font-size: 0.75rem; font-weight: 700; margin-bottom: 5px; text-transform: uppercase; color: var(--text-muted); }
-        input, textarea { width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: 6px; outline: none; font-size: 0.95rem; }
+        .input-group { 
+            margin-bottom: 15px; 
+            position: relative; 
+        }
+        label { 
+            display: block; 
+            font-size: 0.75rem; 
+            font-weight: 700; 
+            margin-bottom: 5px; 
+            text-transform: uppercase; 
+            color: var(--text-muted); 
+        }
+        input, textarea { 
+            width: 100%; 
+            padding: 12px; 
+            border: 1px solid var(--border); 
+            border-radius: 6px; 
+            outline: none; 
+            font-size: 0.95rem; 
+        }
         
-        /* Show/Hide Toggle Styling */
-        .toggle-btn { position: absolute; right: 10px; top: 30px; cursor: pointer; background: #f1f5f9; border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 0.9rem; z-index: 5; }
+        .toggle-btn { 
+            position: absolute; 
+            right: 10px; 
+            top: 30px; 
+            cursor: pointer; 
+            background: #f1f5f9; 
+            border: 1px solid var(--border); 
+            border-radius: 4px; 
+            padding: 2px 6px; 
+            font-size: 0.9rem; 
+            z-index: 5; 
+        }
         
-        .entry-item { padding: 15px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; background: #fff; }
-        .secret-area { margin-top: 10px; padding: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; font-family: 'Monaco', monospace; font-size: 0.85rem; word-break: break-all; display: none; white-space: pre-wrap; }
+        .entry-item { 
+            padding: 15px; 
+            border: 1px solid var(--border); 
+            border-radius: 8px; 
+            margin-bottom: 10px; 
+            background: #fff; 
+        }
+        .secret-area { 
+            margin-top: 10px; 
+            padding: 12px; 
+            background: #f8fafc; 
+            border: 1px solid var(--border); 
+            border-radius: 6px; 
+            font-family: 'Monaco', monospace; 
+            font-size: 0.85rem; 
+            word-break: break-all; 
+            display: none; 
+            white-space: pre-wrap; 
+            border-left: 3px solid var(--accent); 
+        }
         .secret-area.active { display: block; }
         
-        .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; color: white; transition: 0.2s; font-size: 0.9rem; }
+        .btn { 
+            padding: 10px 20px; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-weight: 600; 
+            color: white; 
+            transition: 0.2s; 
+            font-size: 0.9rem; 
+        }
         .btn-accent { background: var(--accent); }
         .btn-purple { background: var(--purple); }
         .btn-danger { background: var(--danger); }
         
-        .upload-zone { border: 2px dashed var(--border); padding: 20px; text-align: center; border-radius: 8px; cursor: pointer; color: var(--text-muted); margin-bottom: 15px; font-size: 0.85rem; background: #fafafa; }
-        .upload-zone:hover { border-color: var(--accent); background: #f0f7ff; }
+        .upload-zone { 
+            border: 2px dashed var(--border); 
+            padding: 20px; 
+            text-align: center; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            color: var(--text-muted); 
+            margin-bottom: 15px; 
+            font-size: 0.85rem; 
+            background: #fafafa; 
+        }
+        .upload-zone:hover { 
+            border-color: var(--accent); 
+            background: #f0f7ff; 
+        }
     </style>
 </head>
 <body>
 
-<div id="sync-banner">⚠️ Local changes detected. Download a fresh backup to keep browsers in sync.</div>
+<div id="sync-banner">⚠️ Local changes detected. Download the latest backup.</div>
 
 <section class="sidebar">
     <h1>Vault</h1>
-    <div id="sidebar-meta" style="display:none">
+    <span class="version-tag">Engine v1.1.3 (IndexedDB)</span>
+    <div id="sidebar-meta" style="display:none; margin-top:30px;">
         <p id="last-update" style="font-size: 0.8rem; color: #94a3b8;"></p>
-        <p id="entry-count" style="margin-top: 5px; font-size: 0.8rem; color: #94a3b8;"></p>
+        <p id="entry-count" style="margin-top: 5px; font-size: 0.8rem; color: #94a3b8; font-weight: 600;"></p>
     </div>
 </section>
 
@@ -78,25 +207,13 @@
         </div>
 
         <div id="auth-unlock" style="display:none">
-            <div class="input-group">
-                <label>Master Key</label>
-                <input type="password" id="unlock-key">
-                <button class="toggle-btn" data-target="unlock-key">👁️</button>
-            </div>
+            <div class="input-group"><label>Master Key</label><input type="password" id="unlock-key"><button class="toggle-btn" data-target="unlock-key">👁️</button></div>
             <button id="unlock-btn" class="btn btn-accent" style="width:100%">Access Vault</button>
         </div>
 
         <div id="auth-new">
-            <div class="input-group">
-                <label>Create Master Key</label>
-                <input type="password" id="new-key">
-                <button class="toggle-btn" data-target="new-key">👁️</button>
-            </div>
-            <div class="input-group">
-                <label>Confirm Master Key</label>
-                <input type="password" id="new-confirm">
-                <button class="toggle-btn" data-target="new-confirm">👁️</button>
-            </div>
+            <div class="input-group"><label>Create Master Key (min. 10 chars)</label><input type="password" id="new-key"><button class="toggle-btn" data-target="new-key">👁️</button></div>
+            <div class="input-group"><label>Confirm Master Key</label><input type="password" id="new-confirm"><button class="toggle-btn" data-target="new-confirm">👁️</button></div>
             <button id="create-btn" class="btn btn-accent" style="width:100%">Initialize Encrypted Storage</button>
         </div>
 
@@ -105,11 +222,7 @@
                 <span id="file-label">Click to upload <b>vault_backup.json</b></span>
                 <input type="file" id="file-input" style="display:none" accept=".json">
             </div>
-            <div class="input-group">
-                <label>Master Key for this Backup</label>
-                <input type="password" id="restore-key">
-                <button class="toggle-btn" data-target="restore-key">👁️</button>
-            </div>
+            <div class="input-group"><label>Master Key for this Backup</label><input type="password" id="restore-key"><button class="toggle-btn" data-target="restore-key">👁️</button></div>
             <button id="restore-btn" class="btn btn-purple" style="width:100%">Restore & Decrypt</button>
         </div>
     </div>
@@ -127,7 +240,7 @@
             
             <div id="importer-ui" style="display:none">
                 <div class="upload-zone" id="content-zone">
-                    <b>Drop or Click to Import File Content</b> (PEM, CRT, KEY, etc.)
+                    <b>Drop or Click to Import File Content</b>
                     <input type="file" id="content-uploader" style="display:none">
                 </div>
             </div>
@@ -144,18 +257,9 @@
 
         <div id="security-section" style="display:none">
             <h3>Master Security Settings</h3>
-            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:20px">Changing your key will re-encrypt all stored data with a fresh salt.</p>
-            <div class="input-group">
-                <label>New Master Key</label>
-                <input type="password" id="change-pass-new">
-                <button class="toggle-btn" data-target="change-pass-new">👁️</button>
-            </div>
-            <div class="input-group">
-                <label>Confirm New Key</label>
-                <input type="password" id="change-pass-confirm">
-                <button class="toggle-btn" data-target="change-pass-confirm">👁️</button>
-            </div>
-            <button id="change-pass-btn" class="btn btn-danger" style="width:100%">Update Master Key</button>
+            <div class="input-group"><label>New Master Key (min. 10 chars)</label><input type="password" id="change-pass-new"><button class="toggle-btn" data-target="change-pass-new">👁️</button></div>
+            <div class="input-group"><label>Confirm New Key</label><input type="password" id="change-pass-confirm"><button class="toggle-btn" data-target="change-pass-confirm">👁️</button></div>
+            <button id="change-pass-btn" class="btn btn-danger" style="width:100%">Update & Re-encrypt</button>
             <button id="wipe-btn" class="btn btn-danger" style="width:100%; margin-top:30px; opacity:0.6">Wipe All Browser Data</button>
         </div>
 
@@ -167,200 +271,385 @@
 </main>
 
 <script nonce="vault-internal-2026">
-    let vaultData = { passwords: [], keys: [], certs: [] };
-    let currentKey = null, activeTab = 'passwords', stagedBlob = null;
+const VAULT_VERSION = "1.1.3";
+const DB_NAME = "VaultDB";
+const DB_VERSION = 1;
+const STORE_NAME = "vault";
+const BLOB_KEY = "main";
 
-    // --- CRYPTOGRAPHY ---
-    async function deriveKey(pass, salt) {
-        const hash = await hashwasm.argon2id({ 
-            password: pass, salt: salt, iterations: 3, parallelism: 4, memorySize: 65536, hashLength: 32, outputType: 'binary' 
-        });
-        return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
-    }
+let vaultData = { passwords: [], keys: [], certs: [] };
+let currentKey = null;
+let activeTab = 'passwords';
+let stagedBlob = null;
+let db = null;
 
-    async function decryptBlob(blob, pass) {
-        try {
-            const s = Uint8Array.from(atob(blob.s), c => c.charCodeAt(0));
-            const i = Uint8Array.from(atob(blob.i), c => c.charCodeAt(0));
-            const ct = Uint8Array.from(atob(blob.ct), c => c.charCodeAt(0));
-            const key = await deriveKey(pass, s);
-            const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: i }, key, ct);
-            return JSON.parse(new TextDecoder().decode(dec));
-        } catch (e) { return null; }
-    }
-
-    async function autoSave() {
-        if(!currentKey) return;
-        const s = crypto.getRandomValues(new Uint8Array(16)), i = crypto.getRandomValues(new Uint8Array(12));
-        const key = await deriveKey(currentKey, s);
-        const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: i }, key, new TextEncoder().encode(JSON.stringify(vaultData)));
-        const blob = { 
-            ct: btoa(String.fromCharCode(...new Uint8Array(enc))), 
-            s: btoa(String.fromCharCode(...s)), 
-            i: btoa(String.fromCharCode(...i)) 
+// IndexedDB Helpers
+async function openDB() {
+    if (db) return db;
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => {
+            db = req.result;
+            resolve(db);
         };
-        localStorage.setItem('v_blob', JSON.stringify(blob));
+        req.onupgradeneeded = e => {
+            const upgradeDb = e.target.result;
+            if (!upgradeDb.objectStoreNames.contains(STORE_NAME)) {
+                upgradeDb.createObjectStore(STORE_NAME);
+            }
+        };
+    });
+}
+
+async function getBlob() {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction(STORE_NAME, "readonly");
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.get(BLOB_KEY);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+
+async function setBlob(value) {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction(STORE_NAME, "readwrite");
+        const store = tx.objectStore(STORE_NAME);
+        store.put(value, BLOB_KEY);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+}
+
+async function clearDB() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.deleteDatabase(DB_NAME);
+        req.onsuccess = resolve;
+        req.onerror = reject;
+        req.onblocked = () => alert("Delete blocked - close other tabs.");
+    });
+}
+
+// Crypto
+async function deriveKey(pass, salt) {
+    const hash = await hashwasm.argon2id({
+        password: pass,
+        salt: salt,
+        iterations: 5,
+        parallelism: 1,
+        memorySize: 194560,
+        hashLength: 32,
+        outputType: 'binary'
+    });
+    return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function decryptBlob(blob, pass) {
+    try {
+        if (!blob?.h) throw new Error("No integrity check – possibly old vault");
+        const s = Uint8Array.from(atob(blob.s), c => c.charCodeAt(0));
+        const i = Uint8Array.from(atob(blob.i), c => c.charCodeAt(0));
+        const ct = Uint8Array.from(atob(blob.ct), c => c.charCodeAt(0));
+        const h = Uint8Array.from(atob(blob.h), c => c.charCodeAt(0));
+
+        const hmacKeyRaw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pass + "hmac"));
+        const hmacKey = await crypto.subtle.importKey("raw", hmacKeyRaw, { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+        const toVerify = new Uint8Array([...s, ...i, ...ct]);
+        const valid = await crypto.subtle.verify("HMAC", hmacKey, h, toVerify);
+        if (!valid) throw new Error("Integrity check failed");
+
+        const key = await deriveKey(pass, s);
+        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: i }, key, ct);
+        return JSON.parse(new TextDecoder().decode(dec));
+    } catch (e) {
+        console.error(e);
+        return null;
+    }
+}
+
+async function autoSave() {
+    if (!currentKey) return;
+    try {
+        const s = crypto.getRandomValues(new Uint8Array(16));
+        const i = crypto.getRandomValues(new Uint8Array(12));
+        const key = await deriveKey(currentKey, s);
+
+        const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: i }, key, new TextEncoder().encode(JSON.stringify(vaultData)));
+
+        const hmacKeyRaw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(currentKey + "hmac"));
+        const hmacKey = await crypto.subtle.importKey("raw", hmacKeyRaw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+        const toSign = new Uint8Array([...s, ...i, ...new Uint8Array(enc)]);
+        const hmac = await crypto.subtle.sign("HMAC", hmacKey, toSign);
+
+        const blob = {
+            ct: btoa(String.fromCharCode(...new Uint8Array(enc))),
+            s: btoa(String.fromCharCode(...s)),
+            i: btoa(String.fromCharCode(...i)),
+            h: btoa(String.fromCharCode(...new Uint8Array(hmac)))
+        };
+
+        await setBlob(blob);
         document.getElementById('sync-banner').style.display = 'block';
         updateMeta();
+    } catch (err) {
+        console.error("Save failed:", err);
+        alert("Failed to save: " + (err.name === 'QuotaExceededError' ? "Storage full" : err.message));
     }
+}
 
-    // --- UI ENGINE ---
-    function escapeHTML(str) { const p = document.createElement('p'); p.textContent = str; return p.innerHTML; }
-    
-    function updateMeta() {
-        document.getElementById('sidebar-meta').style.display = 'block';
-        document.getElementById('last-update').innerText = "Sync: " + new Date().toLocaleTimeString();
-        const total = (vaultData.passwords?.length || 0) + (vaultData.keys?.length || 0) + (vaultData.certs?.length || 0);
-        document.getElementById('entry-count').innerText = total + " items secured";
-    }
+// UI Helpers
+function escapeHTML(str) {
+    const p = document.createElement('p');
+    p.textContent = str;
+    return p.innerHTML;
+}
 
-    function renderList() {
-        const container = document.getElementById('list-container');
-        container.innerHTML = '';
-        const query = document.getElementById('v-search').value.toLowerCase();
-        
-        (vaultData[activeTab] || []).filter(e => e.name.toLowerCase().includes(query)).forEach(e => {
-            const div = document.createElement('div'); div.className = 'entry-item';
-            div.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center;">
-                <b>${escapeHTML(e.name)}</b>
+function updateMeta() {
+    document.getElementById('sidebar-meta').style.display = 'block';
+    document.getElementById('last-update').innerText = "Last sync: " + new Date().toLocaleTimeString();
+    const total = (vaultData.passwords?.length || 0) + (vaultData.keys?.length || 0) + (vaultData.certs?.length || 0);
+    document.getElementById('entry-count').innerText = total + " encrypted objects";
+}
+
+function renderList() {
+    const container = document.getElementById('list-container');
+    container.innerHTML = '';
+    const query = document.getElementById('v-search').value.toLowerCase();
+
+    const list = vaultData[activeTab] || [];
+    list.filter(e => e.name.toLowerCase().includes(query)).forEach(e => {
+        const div = document.createElement('div');
+        div.className = 'entry-item';
+        div.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <b>${escapeHTML(e.name)}</b>
+                    ${e.tag ? `<br><small style="color:var(--text-muted)">${escapeHTML(e.tag)}</small>` : ''}
+                </div>
                 <div>
                     <button class="btn btn-accent btn-sm act-v" data-id="${e.id}" style="padding:4px 10px; font-size:0.75rem;">View</button>
-                    <button class="btn btn-purple btn-sm act-c" id="cp-${e.id}" data-id="${e.id}" style="padding:4px 10px; font-size:0.75rem;">Copy</button>
+                    <button class="btn btn-purple btn-sm act-c" data-id="${e.id}" style="padding:4px 10px; font-size:0.75rem;">Copy</button>
                     <button class="btn btn-danger btn-sm act-d" data-id="${e.id}" style="padding:4px 10px; font-size:0.75rem;">×</button>
                 </div>
-            </div><div id="sec-${e.id}" class="secret-area"></div>`;
-            container.appendChild(div);
-        });
+            </div>
+            <div id="sec-${e.id}" class="secret-area"></div>
+        `;
+        container.appendChild(div);
+    });
 
-        document.querySelectorAll('.act-v').forEach(b => b.onclick = () => {
-            const el = document.getElementById(`sec-${b.dataset.id}`);
-            if(el.classList.contains('active')) { el.textContent = ''; el.classList.remove('active'); }
-            else { el.textContent = vaultData[activeTab].find(x => x.id == b.dataset.id).content; el.classList.add('active'); }
-        });
-        document.querySelectorAll('.act-c').forEach(b => b.onclick = async () => {
-            const secret = vaultData[activeTab].find(x => x.id == b.dataset.id).content;
-            await navigator.clipboard.writeText(secret);
-            const originalText = b.innerText; b.innerText = "Saved!"; setTimeout(() => b.innerText = originalText, 1500);
-        });
-        document.querySelectorAll('.act-d').forEach(b => b.onclick = async () => {
-            if(confirm("Delete this entry?")) {
-                vaultData[activeTab] = vaultData[activeTab].filter(x => x.id != b.dataset.id);
-                await autoSave(); renderList();
-            }
-        });
+    document.querySelectorAll('.act-v').forEach(b => b.onclick = () => {
+        const el = document.getElementById(`sec-${b.dataset.id}`);
+        if (el.classList.contains('active')) {
+            el.textContent = '';
+            el.classList.remove('active');
+        } else {
+            el.textContent = vaultData[activeTab].find(x => x.id == b.dataset.id).content;
+            el.classList.add('active');
+        }
+    });
+
+    document.querySelectorAll('.act-c').forEach(b => b.onclick = async () => {
+        const secret = vaultData[activeTab].find(x => x.id == b.dataset.id).content;
+        await navigator.clipboard.writeText(secret);
+        const old = b.innerText;
+        b.innerText = "Copied!";
+        setTimeout(() => b.innerText = old, 1500);
+    });
+
+    document.querySelectorAll('.act-d').forEach(b => b.onclick = async () => {
+        if (!confirm("Delete this entry?")) return;
+        vaultData[activeTab] = vaultData[activeTab].filter(x => x.id != b.dataset.id);
+        await autoSave();
+        renderList();
+    });
+}
+
+// Event listeners
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        await openDB();
+    } catch (e) {
+        alert("IndexedDB not available. Vault cannot function properly.");
+        return;
     }
 
-    // --- INITIALIZATION ---
-    document.addEventListener('DOMContentLoaded', () => {
-        // Toggle Logic
-        document.querySelectorAll('.toggle-btn').forEach(btn => {
-            btn.onclick = (e) => {
-                e.preventDefault();
-                const input = document.getElementById(btn.dataset.target);
-                if(input.type === 'password') { input.type = 'text'; btn.innerText = '🔒'; }
-                else { input.type = 'password'; btn.innerText = '👁️'; }
-            };
-        });
+    const existing = await getBlob();
+    if (existing) {
+        document.getElementById('tab-unlock').style.display = 'block';
+        document.getElementById('auth-unlock').style.display = 'block';
+        document.getElementById('auth-new').style.display = 'none';
+        document.querySelector('.tab[data-mode="unlock"]').classList.add('active');
+        document.querySelector('.tab[data-mode="new"]').classList.remove('active');
+    }
 
-        if(localStorage.getItem('v_blob')) {
-            document.getElementById('tab-unlock').style.display = 'block';
-            document.getElementById('auth-new').style.display = 'none';
-            document.getElementById('auth-unlock').style.display = 'block';
-            document.querySelector('.tab[data-mode="unlock"]').classList.add('active');
-            document.querySelector('.tab[data-mode="new"]').classList.remove('active');
-        }
-
-        // Tab Switching
-        document.querySelectorAll('.tab[data-mode]').forEach(el => el.onclick = () => {
-            ['unlock', 'new', 'restore'].forEach(m => document.getElementById('auth-' + m).style.display = 'none');
-            document.getElementById('auth-' + el.dataset.mode).style.display = 'block';
-            document.querySelectorAll('.tab[data-mode]').forEach(t => t.classList.remove('active'));
-            el.classList.add('active');
-        });
-
-        document.querySelectorAll('.tab[data-tab]').forEach(el => el.onclick = () => {
-            activeTab = el.dataset.tab;
-            document.querySelectorAll('.tab[data-tab]').forEach(t => t.classList.remove('active'));
-            el.classList.add('active');
-            document.getElementById('vault-content-section').style.display = (activeTab === 'security') ? 'none' : 'block';
-            document.getElementById('security-section').style.display = (activeTab === 'security') ? 'block' : 'none';
-            document.getElementById('importer-ui').style.display = (activeTab === 'keys' || activeTab === 'certs') ? 'block' : 'none';
-            renderList();
-        });
-
-        // Functional Buttons
-        document.getElementById('unlock-btn').onclick = async () => {
-            const p = document.getElementById('unlock-key').value;
-            const data = await decryptBlob(JSON.parse(localStorage.getItem('v_blob')), p);
-            if(data) { 
-                currentKey = p; vaultData = data; 
-                document.getElementById('auth-view').style.display = 'none'; 
-                document.getElementById('vault-view').style.display = 'block'; 
-                renderList(); updateMeta(); 
-            } else alert("Invalid Master Key");
+    document.querySelectorAll('.toggle-btn').forEach(btn => {
+        btn.onclick = e => {
+            e.preventDefault();
+            const input = document.getElementById(btn.dataset.target);
+            input.type = input.type === 'password' ? 'text' : 'password';
+            btn.innerText = input.type === 'password' ? '👁️' : '🔒';
         };
-
-        document.getElementById('create-btn').onclick = async () => {
-            const p1 = document.getElementById('new-key').value, p2 = document.getElementById('new-confirm').value;
-            if(p1 === p2 && p1.length >= 8) { 
-                currentKey = p1; await autoSave(); 
-                document.getElementById('auth-view').style.display = 'none'; 
-                document.getElementById('vault-view').style.display = 'block'; 
-                renderList(); updateMeta();
-            } else alert("Mismatch or key too short (min 8).");
-        };
-
-        document.getElementById('restore-btn').onclick = async () => {
-            const p = document.getElementById('restore-key').value;
-            if(!stagedBlob) return alert("Select a file first.");
-            const data = await decryptBlob(stagedBlob, p);
-            if(data) { 
-                currentKey = p; vaultData = data; await autoSave(); 
-                document.getElementById('auth-view').style.display = 'none'; 
-                document.getElementById('vault-view').style.display = 'block'; 
-                renderList(); updateMeta(); 
-            } else alert("Restoration failed: Wrong key.");
-        };
-
-        document.getElementById('add-btn').onclick = async () => {
-            const n = document.getElementById('n-name').value, c = document.getElementById('n-content').value;
-            if(!n || !c) return;
-            vaultData[activeTab].push({ id: Date.now(), name: n, content: c, tag: document.getElementById('n-tag').value });
-            document.getElementById('n-name').value = ''; document.getElementById('n-content').value = '';
-            await autoSave(); renderList();
-        };
-
-        document.getElementById('change-pass-btn').onclick = async () => {
-            const n1 = document.getElementById('change-pass-new').value, n2 = document.getElementById('change-pass-confirm').value;
-            if(n1 === n2 && n1.length >= 8) { currentKey = n1; await autoSave(); alert("Master key updated."); }
-            else alert("Error: Keys mismatch or too short.");
-        };
-
-        // File/IO Handlers
-        document.getElementById('restore-zone').onclick = () => document.getElementById('file-input').click();
-        document.getElementById('file-input').onchange = (e) => {
-            const r = new FileReader(); r.onload = (ev) => { 
-                try { stagedBlob = JSON.parse(ev.target.result); document.getElementById('file-label').innerHTML = "✅ <b>Backup Staged</b>"; }
-                catch(err) { alert("Invalid backup file."); }
-            }; r.readAsText(e.target.files[0]);
-        };
-
-        document.getElementById('content-zone').onclick = () => document.getElementById('content-uploader').click();
-        document.getElementById('content-uploader').onchange = (e) => {
-            const r = new FileReader(); r.onload = (ev) => { 
-                document.getElementById('n-content').value = ev.target.result; 
-                if(!document.getElementById('n-name').value) document.getElementById('n-name').value = e.target.files[0].name;
-            }; r.readAsText(e.target.files[0]);
-        };
-
-        document.getElementById('export-btn').onclick = () => {
-            const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([localStorage.getItem('v_blob')], {type: 'application/json'})); a.download = `vault_backup_${new Date().toISOString().slice(0,10)}.json`; a.click(); document.getElementById('sync-banner').style.display = 'none';
-        };
-
-        document.getElementById('lock-btn').onclick = () => window.location.reload();
-        document.getElementById('wipe-btn').onclick = () => { if(confirm("Wipe all data?")) { localStorage.clear(); window.location.reload(); }};
-        document.getElementById('v-search').oninput = renderList;
     });
+
+    document.querySelectorAll('.tab[data-mode]').forEach(el => el.onclick = () => {
+        ['unlock','new','restore'].forEach(m => document.getElementById('auth-' + m).style.display = 'none');
+        document.getElementById('auth-' + el.dataset.mode).style.display = 'block';
+        document.querySelectorAll('.tab[data-mode]').forEach(t => t.classList.remove('active'));
+        el.classList.add('active');
+    });
+
+    document.querySelectorAll('.tab[data-tab]').forEach(el => el.onclick = () => {
+        activeTab = el.dataset.tab;
+        document.querySelectorAll('.tab[data-tab]').forEach(t => t.classList.remove('active'));
+        el.classList.add('active');
+        const isSecurity = activeTab === 'security';
+        document.getElementById('vault-content-section').style.display = isSecurity ? 'none' : 'block';
+        document.getElementById('security-section').style.display = isSecurity ? 'block' : 'none';
+        document.getElementById('importer-ui').style.display = (activeTab === 'keys' || activeTab === 'certs') ? 'block' : 'none';
+        if (!isSecurity) renderList();
+    });
+
+    document.getElementById('unlock-btn').onclick = async () => {
+        const p = document.getElementById('unlock-key').value;
+        const blob = await getBlob();
+        const data = await decryptBlob(blob, p);
+        if (data) {
+            currentKey = p;
+            vaultData = data;
+            document.getElementById('auth-view').style.display = 'none';
+            document.getElementById('vault-view').style.display = 'block';
+            renderList();
+            updateMeta();
+        } else {
+            alert("Invalid key or corrupted vault.");
+        }
+    };
+
+    document.getElementById('create-btn').onclick = async () => {
+        const p1 = document.getElementById('new-key').value;
+        const p2 = document.getElementById('new-confirm').value;
+        if (p1 !== p2 || p1.length < 10) {
+            alert("Keys must match and be at least 10 characters.");
+            return;
+        }
+        currentKey = p1;
+        await autoSave();
+        document.getElementById('auth-view').style.display = 'none';
+        document.getElementById('vault-view').style.display = 'block';
+        renderList();
+        updateMeta();
+    };
+
+    document.getElementById('add-btn').onclick = async () => {
+        const name = document.getElementById('n-name').value.trim();
+        const content = document.getElementById('n-content').value.trim();
+        if (!name || !content) return alert("Title and content required.");
+        vaultData[activeTab].push({
+            id: Date.now() + Math.random(),
+            name,
+            content,
+            tag: document.getElementById('n-tag').value.trim()
+        });
+        document.getElementById('n-name').value = '';
+        document.getElementById('n-content').value = '';
+        document.getElementById('n-tag').value = '';
+        await autoSave();
+        renderList();
+    };
+
+    document.getElementById('export-btn').onclick = async () => {
+        const blob = await getBlob();
+        if (!blob) return;
+        const pkg = { version: VAULT_VERSION, ts: new Date().toISOString(), payload: blob };
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([JSON.stringify(pkg, null, 2)], {type: 'application/json'}));
+        a.download = `vault_backup_v${VAULT_VERSION}.json`;
+        a.click();
+        document.getElementById('sync-banner').style.display = 'none';
+    };
+
+    document.getElementById('restore-zone').onclick = () => document.getElementById('file-input').click();
+    document.getElementById('file-input').onchange = e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const r = new FileReader();
+        r.onload = ev => {
+            try {
+                const imp = JSON.parse(ev.target.result);
+                stagedBlob = imp.payload || imp;
+                document.getElementById('file-label').innerHTML = `✅ Staged (${imp.version || 'unknown'})`;
+            } catch {
+                alert("Invalid JSON file.");
+            }
+        };
+        r.readAsText(file);
+    };
+
+    document.getElementById('restore-btn').onclick = async () => {
+        const p = document.getElementById('restore-key').value;
+        const data = await decryptBlob(stagedBlob, p);
+        if (data) {
+            currentKey = p;
+            vaultData = data;
+            await autoSave();
+            document.getElementById('auth-view').style.display = 'none';
+            document.getElementById('vault-view').style.display = 'block';
+            renderList();
+            updateMeta();
+        } else {
+            alert("Restoration failed.");
+        }
+    };
+
+    document.getElementById('content-zone').onclick = () => document.getElementById('content-uploader').click();
+    document.getElementById('content-uploader').onchange = e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const r = new FileReader();
+        r.onload = ev => {
+            document.getElementById('n-content').value = ev.target.result;
+            if (!document.getElementById('n-name').value) document.getElementById('n-name').value = file.name;
+        };
+        r.readAsText(file);
+    };
+
+    document.getElementById('change-pass-btn').onclick = async () => {
+        const n1 = document.getElementById('change-pass-new').value;
+        const n2 = document.getElementById('change-pass-confirm').value;
+        if (n1 !== n2 || n1.length < 10) {
+            alert("Keys must match and be at least 10 characters.");
+            return;
+        }
+        if (!confirm("Re-encrypt entire vault?")) return;
+
+        try {
+            const currentBlob = await getBlob();
+            const oldData = await decryptBlob(currentBlob, currentKey);
+            if (!oldData) throw new Error("Current vault unreadable");
+            currentKey = n1;
+            vaultData = oldData;
+            await autoSave();
+            alert("Key updated & vault re-encrypted.");
+            document.getElementById('change-pass-new').value = '';
+            document.getElementById('change-pass-confirm').value = '';
+        } catch (e) {
+            alert("Change failed: " + e.message);
+        }
+    };
+
+    document.getElementById('lock-btn').onclick = () => window.location.reload();
+    document.getElementById('wipe-btn').onclick = async () => {
+        if (confirm("Delete ALL data permanently?")) {
+            await clearDB();
+            window.location.reload();
+        }
+    };
+
+    document.getElementById('v-search').oninput = renderList;
+});
 </script>
 </body>
 </html>
