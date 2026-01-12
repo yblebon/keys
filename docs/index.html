@@ -27,10 +27,13 @@
         .search-box { width: 100%; padding: 12px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 8px; outline: none; }
 
         .entry-form { background: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 25px; }
-        .input-group { margin-bottom: 15px; }
+        .input-group { margin-bottom: 15px; position: relative; }
         label { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 6px; color: var(--text-main); }
         input, textarea { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; outline: none; }
         
+        /* Visibility Toggle CSS */
+        .toggle-pass { position: absolute; right: 10px; top: 32px; cursor: pointer; color: var(--text-muted); font-size: 0.8rem; user-select: none; }
+
         .strength-container { height: 4px; background: #e2e8f0; border-radius: 2px; margin: 8px 0; overflow: hidden; }
         .strength-bar { height: 100%; width: 0%; transition: 0.4s; }
 
@@ -72,8 +75,10 @@
 
         <div id="auth-unlock" style="display:none">
             <h2>Unlock Vault</h2>
-            <div class="input-group"><label>Master Key</label>
+            <div class="input-group">
+                <label>Master Key</label>
                 <input type="password" id="unlock-key" placeholder="Enter passphrase">
+                <span class="toggle-pass" onclick="toggleVisibility('unlock-key')">👁️</span>
             </div>
             <button id="unlock-btn" class="btn btn-accent" style="width:100%" onclick="handleUnlockLocal()">Unlock Vault</button>
             <p style="text-align:center; margin-top:15px; font-size:0.75rem; color:var(--danger); cursor:pointer" onclick="clearLocalData()">Wipe Local Data</p>
@@ -81,12 +86,16 @@
 
         <div id="auth-new">
             <h2>Create New Vault</h2>
-            <div class="input-group"><label>Master Key</label>
-                <input type="password" id="new-key" oninput="checkStrength('new-key', 'strength-bar-init', 'strength-text-init')" placeholder="Strong passphrase">
+            <div class="input-group">
+                <label>Master Key</label>
+                <input type="password" id="new-key" oninput="checkStrength('new-key', 'strength-bar-init')" placeholder="Strong passphrase">
+                <span class="toggle-pass" onclick="toggleVisibility('new-key')">👁️</span>
                 <div class="strength-container"><div id="strength-bar-init" class="strength-bar"></div></div>
             </div>
-            <div class="input-group"><label>Confirm Master Key</label>
+            <div class="input-group">
+                <label>Confirm Master Key</label>
                 <input type="password" id="new-confirm" placeholder="Repeat passphrase">
+                <span class="toggle-pass" onclick="toggleVisibility('new-confirm')">👁️</span>
             </div>
             <button id="create-btn" class="btn btn-accent" style="width:100%" onclick="initNewVault()">Initialize Vault</button>
         </div>
@@ -97,8 +106,10 @@
                 <span id="file-label">Select vault_backup.json</span>
                 <input type="file" id="file-input" style="display:none" onchange="stageFile(this)">
             </div>
-            <div class="input-group"><label>Master Key</label>
+            <div class="input-group">
+                <label>Master Key</label>
                 <input type="password" id="restore-key" placeholder="Enter original passphrase">
+                <span class="toggle-pass" onclick="toggleVisibility('restore-key')">👁️</span>
             </div>
             <button id="restore-btn" class="btn btn-purple" style="width:100%" onclick="initRestoreVault()">Decrypt & Restore</button>
         </div>
@@ -136,9 +147,15 @@
             <h3>Security</h3>
             <div class="entry-form">
                 <label>Change Master Password</label>
-                <input type="password" id="change-pass-new" oninput="checkStrength('change-pass-new', 'strength-bar-change')" placeholder="New password" style="margin-bottom:8px">
-                <div class="strength-container"><div id="strength-bar-change" class="strength-bar"></div></div>
-                <input type="password" id="change-pass-confirm" placeholder="Confirm password" style="margin-top:8px; margin-bottom:10px">
+                <div class="input-group">
+                    <input type="password" id="change-pass-new" oninput="checkStrength('change-pass-new', 'strength-bar-change')" placeholder="New password">
+                    <span class="toggle-pass" onclick="toggleVisibility('change-pass-new')">👁️</span>
+                    <div class="strength-container"><div id="strength-bar-change" class="strength-bar"></div></div>
+                </div>
+                <div class="input-group">
+                    <input type="password" id="change-pass-confirm" placeholder="Confirm password">
+                    <span class="toggle-pass" onclick="toggleVisibility('change-pass-confirm')">👁️</span>
+                </div>
                 <button class="btn btn-danger" style="width:100%" onclick="handleChangePassword()">Update Vault Key</button>
             </div>
             <button class="btn btn-danger" style="width:100%; opacity:0.8" onclick="clearLocalData()">Wipe All Local Data</button>
@@ -156,6 +173,12 @@
     let currentKey = null, activeTab = 'passwords', stagedBlob = null, hasNewChanges = false;
 
     window.onload = () => { if(localStorage.getItem('v_blob')) { document.getElementById('tab-unlock').style.display = 'block'; switchAuth('unlock'); } else { switchAuth('new'); } };
+
+    // --- NEW: TOGGLE VISIBILITY ---
+    function toggleVisibility(id) {
+        const input = document.getElementById(id);
+        input.type = input.type === 'password' ? 'text' : 'password';
+    }
 
     async function deriveKey(pass, salt) {
         const hash = await hashwasm.argon2id({ password: pass, salt: salt, iterations: 3, parallelism: 4, memorySize: 65536, hashLength: 32, outputType: 'binary' });
