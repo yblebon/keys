@@ -3,269 +3,272 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Infrastructure Asset Vault</title>
+    <title>Secure Asset Vault</title>
     <style>
         :root {
             --bg-dark: #0f172a; --bg-light: #f8fafc; --accent: #3b82f6;
             --border: #e2e8f0; --text-main: #1e293b; --text-muted: #64748b;
             --danger: #ef4444; --warning: #f59e0b; --success: #10b981;
+            --purple: #8b5cf6;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; }
-        body { display: flex; min-height: 100vh; background-color: var(--bg-light); }
+        body { display: flex; min-height: 100vh; background-color: var(--bg-light); color: var(--text-main); }
 
-        /* Sync Reminder Banner */
-        #sync-banner {
-            display: none; position: fixed; top: 0; left: 0; right: 0; 
-            background: #fff7ed; border-bottom: 1px solid #fed7aa;
-            padding: 12px; text-align: center; font-size: 0.85rem;
-            color: #9a3412; font-weight: 600; z-index: 1000;
-            animation: slideDown 0.3s ease-out;
-        }
-        @keyframes slideDown { from { transform: translateY(-100%); } to { transform: translateY(0); } }
-
-        /* Sidebar */
-        .sidebar {
-            flex: 1; background-color: var(--bg-dark); color: white; padding: 60px;
-            display: flex; flex-direction: column; justify-content: center;
-            position: sticky; top: 0; height: 100vh;
-        }
+        .sidebar { flex: 1; background-color: var(--bg-dark); color: white; padding: 60px; display: flex; flex-direction: column; justify-content: center; position: sticky; top: 0; height: 100vh; }
         .sidebar h1 { font-size: 3rem; margin-bottom: 20px; line-height: 1.1; }
 
-        /* Content Area */
-        .content-area { flex: 1.5; display: flex; justify-content: center; align-items: flex-start; padding: 60px 40px; overflow-y: auto; }
-        .card { width: 100%; max-width: 750px; background: white; padding: 40px; border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 10px 25px rgba(0,0,0,0.05); position: relative; }
+        .content-area { flex: 1.5; display: flex; justify-content: center; padding: 80px 40px; overflow-y: auto; }
+        .card { width: 100%; max-width: 750px; background: white; padding: 40px; border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
         
-        #auth-view { margin-top: 10vh; }
-        #vault-view { display: none; }
-
-        .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 25px; gap: 20px; }
+        .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 20px; gap: 20px; }
         .tab { padding: 10px 5px; cursor: pointer; color: var(--text-muted); font-weight: 600; border-bottom: 2px solid transparent; }
         .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 
+        .search-box { width: 100%; padding: 12px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem; }
         .entry-form { background: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 25px; }
-        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; }
+        .form-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .input-group { margin-bottom: 15px; }
         label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 6px; }
         input, textarea { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; }
         
-        .tag-badge { display: inline-block; background: #e0f2fe; color: #0369a1; font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; margin-top: 5px; }
-        .entry-item { display: flex; justify-content: space-between; align-items: center; padding: 15px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; background: white; }
+        .entry-item { padding: 15px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; background: white; display: flex; flex-direction: column; }
+        .secret-area { margin-top: 10px; padding: 10px; background: #fff7ed; border-radius: 6px; font-family: monospace; font-size: 0.85rem; word-break: break-all; display: none; border: 1px solid #fed7aa; color: #c2410c; }
+        .secret-area.active { display: block; }
 
-        .btn { padding: 10px 20px; background: var(--accent); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
-        .btn-block { width: 100%; padding: 14px; margin-top: 10px; }
-        .upload-zone { border: 2px dashed var(--border); padding: 15px; text-align: center; border-radius: 8px; cursor: pointer; margin-bottom: 15px; font-size: 0.9rem; color: var(--text-muted); }
+        .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85rem; color: white; transition: 0.2s; }
+        .btn-accent { background: var(--accent); }
+        .btn-purple { background: var(--purple); }
+        .btn-danger { background: var(--danger); }
+        .btn-copy { background: #6366f1; }
+        .btn-success { background: var(--success) !important; }
+        .tag-badge { background: #e0f2fe; color: #0369a1; font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; margin-left: 8px; }
+        .timestamp { font-size: 0.7rem; color: var(--text-muted); margin-top: 4px; }
+        .upload-zone { border: 2px dashed var(--border); padding: 15px; text-align: center; border-radius: 8px; cursor: pointer; margin-bottom: 15px; font-size: 0.85rem; color: var(--text-muted); }
     </style>
 </head>
 <body>
 
-    <div id="sync-banner">
-        ⚠️ Unsaved Changes: Remember to Encrypt & Save or Download a Backup before closing.
+<section class="sidebar">
+    <h1>Secure<br>Vault</h1>
+    <p>Zero-knowledge asset manager. Changes are encrypted and saved automatically.</p>
+</section>
+
+<main class="content-area">
+    <div id="auth-view" class="card">
+        <h2>Unlock Vault</h2>
+        <div class="input-group">
+            <label>Master Key</label>
+            <input type="password" id="master-key-input" placeholder="Enter passphrase">
+        </div>
+        <button class="btn btn-accent" style="width:100%" onclick="handleAccess()">Open Vault</button>
+        
+        <div style="text-align: center; margin-top: 20px; border-top: 1px solid var(--border); padding-top: 20px;">
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">Restore from backup file:</p>
+            <button class="btn" style="background: #f1f5f9; color: #475569; border: 1px solid var(--border);" onclick="document.getElementById('restore-file').click()">
+                Upload JSON
+            </button>
+            <input type="file" id="restore-file" style="display:none" onchange="handleRestore(this)">
+        </div>
     </div>
 
-    <section class="sidebar">
-        <h1>Secure<br>Assets</h1>
-        <p>Local AES-256-GCM encryption for your infrastructure secrets.</p>
-    </section>
-
-    <main class="content-area">
-        <div id="auth-view" class="card">
-            <h2>Unlock Vault</h2>
-            <div class="input-group">
-                <label>Master Key</label>
-                <input type="password" id="master-key-input" placeholder="Enter passphrase">
-            </div>
-            <button class="btn btn-block" onclick="handleAccess()">Open Vault</button>
-            <div style="text-align: center; margin-top: 15px; font-size: 0.85rem;">
-                <span style="color: var(--accent); cursor: pointer;" onclick="document.getElementById('backup-file').click()">Restore from .json</span>
-                <input type="file" id="backup-file" style="display:none" onchange="handleRestore(this)">
-            </div>
+    <div id="vault-view" class="card" style="display:none">
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('passwords')">Passwords</div>
+            <div class="tab" onclick="switchTab('keys')">Keys</div>
+            <div class="tab" onclick="switchTab('certs')">Certificates</div>
         </div>
 
-        <div id="vault-view" class="card">
-            <div class="tabs">
-                <div class="tab active" onclick="switchTab('passwords')">Passwords</div>
-                <div class="tab" onclick="switchTab('keys')">Keys</div>
-                <div class="tab" onclick="switchTab('certs')">Certificates</div>
+        <input type="text" id="vault-search" class="search-box" placeholder="Search by name or tag..." oninput="renderList()">
+
+        <div class="entry-form">
+            <div id="file-upload-section" style="display:none">
+                <div class="upload-zone" onclick="document.getElementById('content-uploader').click()">
+                    Click to upload file content
+                    <input type="file" id="content-uploader" style="display:none" onchange="handleFileUpload(this)">
+                </div>
             </div>
 
-            <div class="entry-form">
-                <div id="file-upload-section" style="display:none">
-                    <div class="upload-zone" onclick="document.getElementById('content-uploader').click()">
-                        <span id="upload-text">Upload File Content</span>
-                        <input type="file" id="content-uploader" style="display:none" onchange="handleFileUpload(this)">
-                    </div>
-                </div>
-
-                <div class="form-grid">
-                    <div class="input-group">
-                        <label>Entry Name</label>
-                        <input type="text" id="new-entry-name">
-                    </div>
-                    <div class="input-group">
-                        <label>Tag (Optional)</label>
-                        <input type="text" id="new-entry-tag">
-                    </div>
-                </div>
-                
-                <div id="login-container" class="input-group">
-                    <label>Login / Username</label>
-                    <input type="text" id="new-entry-login">
-                </div>
-
-                <div class="input-group">
-                    <label id="content-label">Password</label>
-                    <textarea id="new-entry-content"></textarea>
-                </div>
-                <button class="btn btn-sm" onclick="addEntry()">Add Entry</button>
+            <div class="form-header">
+                <h3 id="form-title" style="font-size: 1rem;">Add New Entry</h3>
+                <button id="gen-btn" class="btn btn-purple" onclick="generatePassword()">Generate Strong Password</button>
             </div>
-
-            <div id="list-container"></div>
-
-            <hr style="margin: 25px 0; border: 0; border-top: 1px solid var(--border);">
-            <button class="btn btn-block" onclick="saveAndEncrypt()">Encrypt & Save All</button>
-            <button class="btn btn-block" style="background:#f1f5f9; color:#475569;" onclick="downloadBackup()">Download Backup</button>
-            <p onclick="location.reload()" style="text-align:center; cursor:pointer; font-size:0.8rem; margin-top:15px; color:var(--text-muted)">Lock Vault</p>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px">
+                <div class="input-group"><label>Name</label><input type="text" id="new-name"></div>
+                <div class="input-group"><label>Tag</label><input type="text" id="new-tag"></div>
+            </div>
+            <div id="login-container" class="input-group"><label>Login</label><input type="text" id="new-login"></div>
+            <div class="input-group"><label id="content-label">Content</label><textarea id="new-content"></textarea></div>
+            <button class="btn btn-accent" onclick="addEntry()">Add & Encrypt</button>
         </div>
-    </main>
 
-    <script>
-        let currentKey = null;
-        let activeCategory = 'passwords';
-        let vaultData = { passwords: [], keys: [], certs: [] };
-        let hasUnsavedChanges = false;
+        <div id="list-container"></div>
+        <hr style="margin:20px 0; border:0; border-top:1px solid var(--border)">
+        <button class="btn" style="width:100%; background:#f1f5f9; color:#475569;" onclick="downloadBackup()">Download Backup JSON</button>
+        <p onclick="lockVault()" style="text-align:center; cursor:pointer; font-size:0.8rem; margin-top:20px; color:var(--text-muted)">Manual Lock & Scrub Memory</p>
+    </div>
+</main>
 
-        function setUnsavedChanges(status) {
-            hasUnsavedChanges = status;
-            document.getElementById('sync-banner').style.display = status ? 'block' : 'none';
-        }
+<script>
+    let currentKey = null, activeCategory = 'passwords', vaultData = { passwords: [], keys: [], certs: [] };
 
-        function switchTab(cat) {
-            activeCategory = cat;
-            document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.innerText.toLowerCase().includes(cat)));
-            document.getElementById('login-container').style.display = (cat === 'passwords') ? 'block' : 'none';
-            document.getElementById('file-upload-section').style.display = (cat === 'passwords') ? 'none' : 'block';
-            document.getElementById('content-label').innerText = cat.charAt(0).toUpperCase() + cat.slice(1, -1);
-            renderList();
-        }
+    // --- SECURITY: AUTO-LOCK ---
+    function lockVault() {
+        currentKey = "SCRUBBED_" + Math.random(); 
+        vaultData = { passwords: [], keys: [], certs: [] };
+        window.location.reload();
+    }
+    window.addEventListener('mousedown', () => clearTimeout(window.atlock));
+    window.addEventListener('keydown', () => { clearTimeout(window.atlock); window.atlock = setTimeout(lockVault, 300000); });
 
-        function renderList() {
-            const list = document.getElementById('list-container');
-            list.innerHTML = '';
-            vaultData[activeCategory].forEach(entry => {
-                list.innerHTML += `
-                <div class="entry-item">
-                    <div>
-                        <h4 style="font-size: 0.95rem;">${entry.name}</h4>
-                        ${entry.tag ? `<span class="tag-badge">${entry.tag}</span>` : ''}
+    // --- CRYPTO ---
+    async function deriveKey(p, s) {
+        const enc = new TextEncoder();
+        const base = await crypto.subtle.importKey("raw", enc.encode(p), 'PBKDF2', false, ['deriveKey']);
+        return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: s, iterations: 100000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    }
+
+    async function autoSave() {
+        const s = crypto.getRandomValues(new Uint8Array(16)), i = crypto.getRandomValues(new Uint8Array(12));
+        const key = await deriveKey(currentKey, s);
+        const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: i }, key, new TextEncoder().encode(JSON.stringify(vaultData)));
+        localStorage.setItem('v_blob', JSON.stringify({
+            ct: btoa(String.fromCharCode(...new Uint8Array(enc))),
+            s: btoa(String.fromCharCode(...s)),
+            i: btoa(String.fromCharCode(...i))
+        }));
+    }
+
+    // --- UI ---
+    function switchTab(cat) {
+        activeCategory = cat;
+        document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.innerText.toLowerCase().includes(cat)));
+        document.getElementById('login-container').style.display = (cat==='passwords') ? 'block' : 'none';
+        document.getElementById('gen-btn').style.display = (cat==='passwords') ? 'block' : 'none';
+        document.getElementById('file-upload-section').style.display = (cat==='passwords') ? 'none' : 'block';
+        renderList();
+    }
+
+    function renderList() {
+        const list = document.getElementById('list-container');
+        const search = document.getElementById('vault-search').value.toLowerCase();
+        list.innerHTML = '';
+        
+        const filtered = vaultData[activeCategory].filter(e => 
+            e.name.toLowerCase().includes(search) || (e.tag && e.tag.toLowerCase().includes(search))
+        );
+
+        filtered.forEach(e => {
+            const div = document.createElement('div');
+            div.className = 'entry-item';
+            div.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:start">
+                    <div style="flex:1">
+                        <h4 style="display:flex; align-items:center;">${e.name} ${e.tag ? `<span class="tag-badge">${e.tag}</span>` : ''}</h4>
+                        <p style="font-size:0.75rem; color:var(--text-muted)">${e.login ? 'User: ' + e.login : 'Asset'}</p>
+                        <p class="timestamp">Modified: ${e.modified}</p>
                     </div>
-                    <button class="btn btn-sm" style="background:var(--danger)" onclick="deleteEntry(${entry.id})">Delete</button>
-                </div>`;
-            });
-        }
+                    <div style="display:flex; gap:5px">
+                        <button class="btn btn-accent" onclick="toggleSecret(${e.id})">View</button>
+                        <button class="btn btn-copy" id="cp-${e.id}" onclick="copySecret(${e.id})">Copy</button>
+                        <button class="btn btn-danger" onclick="deleteEntry(${e.id})">Delete</button>
+                    </div>
+                </div>
+                <div id="disp-${e.id}" class="secret-area"></div>`;
+            list.appendChild(div);
+        });
+    }
 
-        function addEntry() {
-            const name = document.getElementById('new-entry-name').value;
-            const content = document.getElementById('new-entry-content').value;
-            if (!name || !content) return alert("Required fields missing");
-            
-            vaultData[activeCategory].push({ 
-                id: Date.now(), 
-                name, 
-                content, 
-                tag: document.getElementById('new-entry-tag').value,
-                login: activeCategory === 'passwords' ? document.getElementById('new-entry-login').value : null 
-            });
-            
-            ['new-entry-name', 'new-entry-content', 'new-entry-login', 'new-entry-tag'].forEach(id => document.getElementById(id).value = '');
-            setUnsavedChanges(true);
-            renderList();
+    function toggleSecret(id) {
+        const el = document.getElementById(`disp-${id}`);
+        if(el.classList.contains('active')) { el.innerText = ''; el.classList.remove('active'); }
+        else {
+            el.innerText = vaultData[activeCategory].find(x => x.id === id).content;
+            el.classList.add('active');
+            setTimeout(() => { if(el) { el.innerText = ''; el.classList.remove('active'); } }, 30000);
         }
+    }
 
-        function deleteEntry(id) {
-            vaultData[activeCategory] = vaultData[activeCategory].filter(e => e.id !== id);
-            setUnsavedChanges(true);
-            renderList();
-        }
+    async function copySecret(id) {
+        const btn = document.getElementById(`cp-${id}`);
+        const content = vaultData[activeCategory].find(x => x.id === id).content;
+        await navigator.clipboard.writeText(content);
+        btn.innerText = "Copied!"; btn.classList.add('btn-success');
+        setTimeout(() => { navigator.clipboard.writeText(""); btn.innerText = "Copy"; btn.classList.remove('btn-success'); }, 10000);
+    }
 
-        async function saveAndEncrypt() {
-            const salt = crypto.getRandomValues(new Uint8Array(16));
-            const iv = crypto.getRandomValues(new Uint8Array(12));
-            const key = await deriveKey(currentKey, salt);
-            const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(vaultData)));
-            
-            const blob = { 
-                ct: btoa(String.fromCharCode(...new Uint8Array(enc))), 
-                s: btoa(String.fromCharCode(...salt)), 
-                i: btoa(String.fromCharCode(...iv)) 
-            };
-            localStorage.setItem('v_blob', JSON.stringify(blob));
-            setUnsavedChanges(false);
-            alert("Vault encrypted and saved!");
-        }
+    function generatePassword() {
+        const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+";
+        const vals = new Uint32Array(20); crypto.getRandomValues(vals);
+        document.getElementById('new-content').value = Array.from(vals).map(x => chars[x % chars.length]).join('');
+    }
 
-        function downloadBackup() {
-            const data = localStorage.getItem('v_blob');
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(new Blob([data], {type: 'application/json'}));
-            a.download = 'vault_backup.json';
-            a.click();
-            setUnsavedChanges(false); // Assume backup covers current state
-        }
+    async function addEntry() {
+        const n = document.getElementById('new-name').value, c = document.getElementById('new-content').value;
+        if(!n || !c) return alert("Fields required");
+        vaultData[activeCategory].push({
+            id: Date.now(), name: n, content: c, tag: document.getElementById('new-tag').value,
+            login: document.getElementById('new-login').value,
+            modified: new Date().toLocaleString()
+        });
+        ['new-name', 'new-content', 'new-tag', 'new-login'].forEach(i => document.getElementById(i).value = '');
+        await autoSave();
+        renderList();
+    }
 
-        // --- CRYPTO & AUTH ---
-        async function deriveKey(pass, salt) {
-            const enc = new TextEncoder();
-            const base = await crypto.subtle.importKey("raw", enc.encode(pass), 'PBKDF2', false, ['deriveKey']);
-            return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-        }
+    async function deleteEntry(id) {
+        vaultData[activeCategory] = vaultData[activeCategory].filter(x => x.id !== id);
+        await autoSave();
+        renderList();
+    }
 
-        async function handleAccess() {
-            const pass = document.getElementById('master-key-input').value;
-            const stored = localStorage.getItem('v_blob');
-            if(!pass) return alert("Key required");
-            if(stored) {
-                const s = await decryptIntoData(JSON.parse(stored), pass);
-                if(s) enterVault(pass);
-            } else enterVault(pass);
+    async function handleAccess() {
+        const pass = document.getElementById('master-key-input').value;
+        const stored = localStorage.getItem('v_blob');
+        if(!pass) return alert("Key required");
+        if(stored) {
+            const success = await decryptIntoData(JSON.parse(stored), pass);
+            if(!success) return;
         }
+        currentKey = pass;
+        document.getElementById('auth-view').style.display = 'none';
+        document.getElementById('vault-view').style.display = 'block';
+        renderList();
+    }
 
-        async function decryptIntoData(blob, pass) {
-            try {
-                const s = Uint8Array.from(atob(blob.s), c => c.charCodeAt(0));
-                const i = Uint8Array.from(atob(blob.i), c => c.charCodeAt(0));
-                const ct = Uint8Array.from(atob(blob.ct), c => c.charCodeAt(0));
-                const key = await deriveKey(pass, s);
-                const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: i }, key, ct);
-                vaultData = JSON.parse(new TextDecoder().decode(dec));
-                return true;
-            } catch (e) { alert("Invalid key"); return false; }
-        }
+    async function decryptIntoData(blob, pass) {
+        try {
+            const s = Uint8Array.from(atob(blob.s), c => c.charCodeAt(0));
+            const i = Uint8Array.from(atob(blob.i), c => c.charCodeAt(0));
+            const ct = Uint8Array.from(atob(blob.ct), c => c.charCodeAt(0));
+            const key = await deriveKey(pass, s);
+            const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: i }, key, ct);
+            vaultData = JSON.parse(new TextDecoder().decode(dec));
+            return true;
+        } catch (e) { alert("Wrong key"); return false; }
+    }
 
-        function enterVault(pass) {
-            currentKey = pass;
-            document.getElementById('auth-view').style.display = 'none';
-            document.getElementById('vault-view').style.display = 'block';
-            renderList();
-        }
+    function handleRestore(input) {
+        const reader = new FileReader();
+        reader.onload = (e) => { localStorage.setItem('v_blob', e.target.result); alert("Backup Loaded."); };
+        reader.readAsText(input.files[0]);
+    }
 
-        function handleRestore(input) {
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                const pass = document.getElementById('master-key-input').value;
-                const s = await decryptIntoData(JSON.parse(e.target.result), pass);
-                if(s) { localStorage.setItem('v_blob', e.target.result); enterVault(pass); }
-            };
-            reader.readAsText(input.files[0]);
-        }
+    function handleFileUpload(input) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            document.getElementById('new-content').value = e.target.result;
+            if(!document.getElementById('new-name').value) document.getElementById('new-name').value = input.files[0].name;
+        };
+        reader.readAsText(input.files[0]);
+    }
 
-        function handleFileUpload(input) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                document.getElementById('new-entry-content').value = e.target.result;
-                if (!document.getElementById('new-entry-name').value) document.getElementById('new-entry-name').value = input.files[0].name;
-            };
-            reader.readAsText(input.files[0]);
-        }
-    </script>
+    function downloadBackup() {
+        const data = localStorage.getItem('v_blob');
+        if(!data) return alert("No data saved.");
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([data], {type: 'application/json'}));
+        a.download = 'vault_backup.json'; a.click();
+    }
+</script>
 </body>
 </html>
