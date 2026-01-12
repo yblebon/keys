@@ -65,11 +65,24 @@
 <main class="content-area">
     <div id="auth-view" class="card">
         <div class="tabs" id="auth-tabs">
-            <div class="tab active" onclick="switchAuth('new')">New Vault</div>
-            <div class="tab" onclick="switchAuth('restore')">Restore Backup</div>
+            <div id="tab-unlock" class="tab" onclick="switchAuth('unlock')" style="display:none">Unlock Vault</div>
+            <div id="tab-new" class="tab active" onclick="switchAuth('new')">New Vault</div>
+            <div id="tab-restore" class="tab" onclick="switchAuth('restore')">Restore Backup</div>
+        </div>
+
+        <div id="auth-unlock" style="display:none">
+            <h2>Unlock Vault</h2>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">An encrypted vault was found on this browser. Enter your key to open it.</p>
+            <div class="input-group">
+                <label>Master Key</label>
+                <input type="password" id="unlock-key" placeholder="Enter passphrase">
+            </div>
+            <button id="unlock-btn" class="btn btn-accent" style="width:100%" onclick="handleUnlockLocal()">Unlock Vault</button>
+            <p style="text-align:center; margin-top:15px; font-size:0.75rem; color:var(--danger); cursor:pointer" onclick="clearLocalData()">Wipe Local Data</p>
         </div>
 
         <div id="auth-new">
+            <h2>Create New Vault</h2>
             <div class="input-group">
                 <label>Master Key</label>
                 <input type="password" id="new-key" oninput="checkStrength('new-key', 'strength-bar-init', 'strength-text-init')" placeholder="Strong passphrase">
@@ -84,13 +97,14 @@
         </div>
 
         <div id="auth-restore" style="display:none">
+            <h2>Restore Backup</h2>
             <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
                 <span id="file-label">Select vault_backup.json</span>
                 <input type="file" id="file-input" style="display:none" onchange="stageFile(this)">
             </div>
             <div class="input-group">
                 <label>Master Key</label>
-                <input type="password" id="restore-key" placeholder="Enter passphrase">
+                <input type="password" id="restore-key" placeholder="Enter original passphrase">
             </div>
             <button id="restore-btn" class="btn btn-purple" style="width:100%" onclick="initRestoreVault()">Decrypt & Restore</button>
         </div>
@@ -134,22 +148,17 @@
         </div>
 
         <div id="security-section" style="display:none">
-            <h3 style="margin-bottom: 15px;">Change Master Password</h3>
-            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">
-                Changing your password will re-encrypt all stored assets with a new key. 
-                <b>Download a new backup immediately after this process.</b>
-            </p>
-            <div class="input-group">
-                <label>New Master Password</label>
-                <input type="password" id="change-pass-new" oninput="checkStrength('change-pass-new', 'strength-bar-change', 'strength-text-change')" placeholder="New passphrase">
-                <div class="strength-container"><div id="strength-bar-change" class="strength-bar"></div></div>
-                <p id="strength-text-change" style="font-size: 0.7rem; color: var(--text-muted);">Strength: None</p>
+            <h3>Security Controls</h3>
+            <div class="entry-form">
+                <label>Change Master Password</label>
+                <div class="input-group">
+                    <input type="password" id="change-pass-new" oninput="checkStrength('change-pass-new', 'strength-bar-change', 'strength-text-change')" placeholder="New passphrase">
+                    <div class="strength-container"><div id="strength-bar-change" class="strength-bar"></div></div>
+                </div>
+                <input type="password" id="change-pass-confirm" placeholder="Repeat new passphrase" style="margin-bottom:10px">
+                <button id="change-pass-btn" class="btn btn-danger" style="width:100%" onclick="handleChangePassword()">Update & Re-encrypt</button>
             </div>
-            <div class="input-group">
-                <label>Confirm New Password</label>
-                <input type="password" id="change-pass-confirm" placeholder="Repeat new passphrase">
-            </div>
-            <button id="change-pass-btn" class="btn btn-danger" style="width:100%" onclick="handleChangePassword()">Update & Re-encrypt Vault</button>
+            <button class="btn btn-danger" style="width:100%; opacity:0.8" onclick="clearLocalData()">Wipe All Local Data</button>
         </div>
         
         <div style="margin-top:30px; border-top:1px solid var(--border); padding-top:20px; display:flex; gap:10px">
@@ -165,6 +174,16 @@
     let activeTab = 'passwords';
     let stagedBlob = null;
     let hasNewChanges = false;
+
+    // --- ON LOAD DETECTION ---
+    window.onload = () => {
+        if(localStorage.getItem('v_blob')) {
+            document.getElementById('tab-unlock').style.display = 'block';
+            switchAuth('unlock');
+        } else {
+            switchAuth('new');
+        }
+    };
 
     // --- CRYPTO ---
     async function deriveKey(pass, salt) {
@@ -193,9 +212,12 @@
 
     // --- AUTH ---
     function switchAuth(m) {
-        document.getElementById('auth-new').style.display = m === 'new' ? 'block' : 'none';
-        document.getElementById('auth-restore').style.display = m === 'restore' ? 'block' : 'none';
-        document.querySelectorAll('#auth-tabs .tab').forEach((t, i) => t.classList.toggle('active', (m==='new' && i===0) || (m==='restore' && i===1)));
+        ['unlock', 'new', 'restore'].forEach(mode => {
+            const el = document.getElementById('auth-' + mode);
+            if(el) el.style.display = (m === mode) ? 'block' : 'none';
+            const tab = document.getElementById('tab-' + mode);
+            if(tab) tab.classList.toggle('active', m === mode);
+        });
     }
 
     function checkStrength(inputId, barId, textId) {
@@ -207,7 +229,35 @@
         const c = ['#ef4444', '#f59e0b', '#3b82f6', '#10b981'];
         const l = ['Weak', 'Fair', 'Good', 'Strong'];
         b.style.width = p.length ? (s+1)*25 + '%' : '0%'; b.style.background = c[s] || c[0];
-        t.innerText = p.length ? 'Strength: ' + l[s] : 'Strength: None';
+        if(t) t.innerText = p.length ? 'Strength: ' + l[s] : 'Strength: None';
+    }
+
+    async function handleUnlockLocal() {
+        const p = document.getElementById('unlock-key').value;
+        const blob = JSON.parse(localStorage.getItem('v_blob'));
+        const btn = document.getElementById('unlock-btn');
+        btn.disabled = true; btn.innerText = "Deriving Argon2id...";
+        
+        const success = await decryptIntoData(blob, p);
+        if(success) {
+            currentKey = p; openVault();
+            hasNewChanges = false;
+        } else {
+            alert("Incorrect Key");
+            btn.disabled = false; btn.innerText = "Unlock Vault";
+        }
+    }
+
+    async function decryptIntoData(blob, pass) {
+        try {
+            const s = Uint8Array.from(atob(blob.s), c => c.charCodeAt(0));
+            const i = Uint8Array.from(atob(blob.i), c => c.charCodeAt(0));
+            const ct = Uint8Array.from(atob(blob.ct), c => c.charCodeAt(0));
+            const key = await deriveKey(pass, s);
+            const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: i }, key, ct);
+            vaultData = JSON.parse(new TextDecoder().decode(dec));
+            return true;
+        } catch (e) { return false; }
     }
 
     async function initNewVault() {
@@ -227,18 +277,13 @@
     async function initRestoreVault() {
         const p = document.getElementById('restore-key').value;
         if(!stagedBlob || !p) return;
-        try {
-            const s = Uint8Array.from(atob(stagedBlob.s), c => c.charCodeAt(0));
-            const i = Uint8Array.from(atob(stagedBlob.i), c => c.charCodeAt(0));
-            const ct = Uint8Array.from(atob(stagedBlob.ct), c => c.charCodeAt(0));
-            const key = await deriveKey(p, s);
-            const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: i }, key, ct);
-            vaultData = JSON.parse(new TextDecoder().decode(dec));
+        const success = await decryptIntoData(stagedBlob, p);
+        if(success) {
             currentKey = p; localStorage.setItem('v_blob', JSON.stringify(stagedBlob)); openVault();
-        } catch (e) { alert("Fail."); }
+        } else { alert("Decryption failed."); }
     }
 
-    // --- VAULT & TABS ---
+    // --- VAULT & UI ---
     function openVault() {
         document.getElementById('auth-view').style.display = 'none';
         document.getElementById('vault-view').style.display = 'block';
@@ -249,16 +294,9 @@
     function switchTab(t) {
         activeTab = t;
         document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.innerText.toLowerCase() === t.toLowerCase()));
-        
-        const contentSection = document.getElementById('vault-content-section');
-        const securitySection = document.getElementById('security-section');
-
-        if(t === 'security') {
-            contentSection.style.display = 'none';
-            securitySection.style.display = 'block';
-        } else {
-            contentSection.style.display = 'block';
-            securitySection.style.display = 'none';
+        document.getElementById('vault-content-section').style.display = (t === 'security') ? 'none' : 'block';
+        document.getElementById('security-section').style.display = (t === 'security') ? 'block' : 'none';
+        if(t !== 'security') {
             document.getElementById('login-field').style.display = t === 'passwords' ? 'block' : 'none';
             document.getElementById('gen-btn').style.display = t === 'passwords' ? 'block' : 'none';
             document.getElementById('file-content-section').style.display = t === 'passwords' ? 'none' : 'block';
@@ -266,30 +304,12 @@
         }
     }
 
-    // --- PASSWORD CHANGE LOGIC ---
     async function handleChangePassword() {
         const n1 = document.getElementById('change-pass-new').value;
         const n2 = document.getElementById('change-pass-confirm').value;
-        const btn = document.getElementById('change-pass-btn');
-
-        if(n1 !== n2 || n1.length < 8) return alert("Passwords mismatch or too weak.");
-        
-        btn.disabled = true;
-        btn.innerText = "Re-encrypting Vault (Argon2id)...";
-
-        // Logic: Update the currentKey and run autoSave
-        // Since vaultData is already decrypted in memory, we just encrypt with new key
-        currentKey = n1;
-        await autoSave();
-
-        alert("Master password updated successfully. Your vault is now re-encrypted.");
-        btn.disabled = false;
-        btn.innerText = "Update & Re-encrypt Vault";
-        
-        // Clear fields
-        document.getElementById('change-pass-new').value = "";
-        document.getElementById('change-pass-confirm').value = "";
-        checkStrength('change-pass-new', 'strength-bar-change', 'strength-text-change');
+        if(n1 !== n2 || n1.length < 8) return alert("Keys mismatch.");
+        currentKey = n1; await autoSave();
+        alert("Password updated.");
     }
 
     function importContent(input) {
@@ -305,14 +325,11 @@
         const container = document.getElementById('list-container');
         const query = document.getElementById('v-search').value.toLowerCase();
         container.innerHTML = '';
-        if(!vaultData[activeTab]) return;
-
         vaultData[activeTab].filter(e => e.name.toLowerCase().includes(query) || (e.tag && e.tag.toLowerCase().includes(query)))
         .forEach(e => {
             const div = document.createElement('div'); div.className = 'entry-item';
             div.innerHTML = `<div style="display:flex; justify-content:space-between">
-                <div><h4>${e.name}<span class="tag-badge">${e.tag || ''}</span></h4>
-                <p style="font-size:0.75rem; color:var(--text-muted)">${e.mod}</p></div>
+                <div><h4>${e.name}<span class="tag-badge">${e.tag || ''}</span></h4><p style="font-size:0.75rem">${e.mod}</p></div>
                 <div><button class="btn btn-accent" style="padding:4px 8px" onclick="reveal(${e.id})">View</button>
                 <button class="btn btn-danger" style="padding:4px 8px" onclick="remove(${e.id})">×</button></div>
             </div><div id="sec-${e.id}" class="secret-area"></div>`;
@@ -346,11 +363,11 @@
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([blob], {type: 'application/json'}));
         a.download = 'vault_backup.json'; a.click();
-        hasNewChanges = false;
-        document.getElementById('sync-banner').style.display = 'none';
+        hasNewChanges = false; document.getElementById('sync-banner').style.display = 'none';
     }
 
     function lock() { window.location.reload(); }
+    function clearLocalData() { if(confirm("Wipe all data from this browser?")) { localStorage.clear(); window.location.reload(); } }
     function generate() { document.getElementById('n-content').value = Array.from(crypto.getRandomValues(new Uint32Array(16))).map(x => "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789!@#$%^&*".charAt(x % 62)).join(''); }
 </script>
 </body>
