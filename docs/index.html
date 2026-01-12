@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infrastructure Asset Vault</title>
+    <style>
+        :root {
+            --bg-dark: #0f172a; --bg-light: #f8fafc; --accent: #3b82f6;
+            --border: #e2e8f0; --text-main: #1e293b; --text-muted: #64748b;
+            --danger: #ef4444; --warning: #f59e0b; --success: #10b981;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; }
+        body { display: flex; min-height: 100vh; background-color: var(--bg-light); }
+
+        /* Sidebar */
+        .sidebar {
+            flex: 1; background-color: var(--bg-dark); color: white; padding: 60px;
+            display: flex; flex-direction: column; justify-content: center;
+            position: sticky; top: 0; height: 100vh;
+        }
+        .sidebar h1 { font-size: 3rem; margin-bottom: 20px; line-height: 1.1; }
+
+        /* Content */
+        .content-area { flex: 1.5; display: flex; justify-content: center; align-items: flex-start; padding: 40px; overflow-y: auto; }
+        .card { width: 100%; max-width: 750px; background: white; padding: 40px; border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
+        
+        #auth-view { margin-top: 10vh; }
+        #vault-view { display: none; }
+
+        .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 25px; gap: 20px; }
+        .tab { padding: 10px 5px; cursor: pointer; color: var(--text-muted); font-weight: 600; border-bottom: 2px solid transparent; }
+        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+        /* Entry Form */
+        .entry-form { background: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 25px; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; }
+        .input-group { margin-bottom: 15px; position: relative; }
+        label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 6px; }
+        input, textarea { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; }
+        textarea { min-height: 100px; font-family: 'Courier New', monospace; }
+        
+        /* Tag Badge */
+        .tag-badge { display: inline-block; background: #e0f2fe; color: #0369a1; font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; margin-top: 5px; }
+
+        /* Search Bar */
+        .search-box { width: 100%; padding: 12px; margin-bottom: 20px; border: 1px solid var(--accent); border-radius: 8px; background: #f0f9ff; }
+
+        .upload-zone { border: 2px dashed var(--border); padding: 15px; text-align: center; border-radius: 8px; cursor: pointer; margin-bottom: 15px; font-size: 0.9rem; color: var(--text-muted); }
+        .upload-zone:hover { border-color: var(--accent); color: var(--accent); }
+
+        .entry-item { display: flex; justify-content: space-between; align-items: center; padding: 15px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; background: white; transition: 0.2s; }
+        .entry-item:hover { border-color: var(--accent); }
+
+        .btn { padding: 10px 20px; background: var(--accent); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        .btn-danger { background: var(--danger); }
+        .btn-block { width: 100%; padding: 14px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <section class="sidebar">
+        <h1>Secure<br>Assets</h1>
+        <p>Enterprise-grade local encryption. Manage passwords, keys, and certificates with custom tags and instant search.</p>
+    </section>
+
+    <main class="content-area">
+        <div id="auth-view" class="card">
+            <h2>Unlock Vault</h2>
+            <div class="input-group">
+                <label>Master Key</label>
+                <input type="password" id="master-key-input" placeholder="Your secret passphrase">
+            </div>
+            <button class="btn btn-block" onclick="handleAccess()">Open Vault</button>
+            <div style="text-align: center; margin-top: 15px; font-size: 0.85rem;">
+                <span style="color: var(--accent); cursor: pointer;" onclick="document.getElementById('backup-file').click()">Load Backup .json</span>
+                <input type="file" id="backup-file" style="display:none" onchange="handleRestore(this)">
+            </div>
+        </div>
+
+        <div id="vault-view" class="card">
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('passwords')">Passwords</div>
+                <div class="tab" onclick="switchTab('keys')">Keys</div>
+                <div class="tab" onclick="switchTab('certs')">Certificates</div>
+            </div>
+
+            <input type="text" class="search-box" id="vault-search" placeholder="Search by name or tag..." oninput="renderList()">
+
+            <div class="entry-form">
+                <h3 id="form-title" style="margin-bottom: 15px; font-size: 1rem;">Add New Password</h3>
+                
+                <div id="file-upload-section" style="display:none">
+                    <div class="upload-zone" onclick="document.getElementById('content-uploader').click()">
+                        <span id="upload-text">Upload File Content</span>
+                        <input type="file" id="content-uploader" style="display:none" onchange="handleFileUpload(this)">
+                    </div>
+                </div>
+
+                <div class="form-grid">
+                    <div class="input-group">
+                        <label>Entry Name (Mandatory)</label>
+                        <input type="text" id="new-entry-name" placeholder="e.g. AWS Production">
+                    </div>
+                    <div class="input-group">
+                        <label>Tag (Optional)</label>
+                        <input type="text" id="new-entry-tag" placeholder="e.g. Finance, Project X">
+                    </div>
+                </div>
+                
+                <div id="login-container" class="input-group">
+                    <label>Login / Username</label>
+                    <input type="text" id="new-entry-login" placeholder="e.g. admin_user">
+                </div>
+
+                <div class="input-group">
+                    <label id="content-label">Password</label>
+                    <textarea id="new-entry-content" placeholder="Secret data goes here..." oninput="checkStrength(this.value)"></textarea>
+                    <div id="strength-container">
+                        <div style="height:4px; width:100%; background:#e2e8f0; margin-top:8px; border-radius:2px;">
+                            <div id="strength-bar" style="height:100%; width:0%; transition:0.3s; border-radius:2px;"></div>
+                        </div>
+                        <div id="strength-text" style="font-size:0.7rem; margin-top:4px; font-weight:700;">Strength: N/A</div>
+                    </div>
+                </div>
+                <button class="btn btn-sm" onclick="addEntry()">Add Entry</button>
+            </div>
+
+            <div id="list-container"></div>
+
+            <hr style="margin: 25px 0; border: 0; border-top: 1px solid var(--border);">
+            <button class="btn btn-block" onclick="saveAndEncrypt()">Encrypt & Save All</button>
+            <button class="btn btn-block" style="background:#f1f5f9; color:#475569;" onclick="downloadBackup()">Download Backup</button>
+            <p onclick="location.reload()" style="text-align:center; cursor:pointer; font-size:0.8rem; margin-top:15px; color:var(--text-muted)">Lock Vault</p>
+        </div>
+    </main>
+
+    <script>
+        let currentKey = null;
+        let activeCategory = 'passwords';
+        let vaultData = { passwords: [], keys: [], certs: [] };
+
+        function switchTab(cat) {
+            activeCategory = cat;
+            document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.innerText.toLowerCase().includes(cat)));
+            
+            const loginField = document.getElementById('login-container');
+            const strengthMeter = document.getElementById('strength-container');
+            const uploadSection = document.getElementById('file-upload-section');
+            const label = document.getElementById('content-label');
+            const title = document.getElementById('form-title');
+
+            if (cat === 'passwords') {
+                loginField.style.display = 'block'; strengthMeter.style.display = 'block'; uploadSection.style.display = 'none';
+                label.innerText = "Password"; title.innerText = "Add New Password";
+            } else {
+                loginField.style.display = 'none'; strengthMeter.style.display = 'none'; uploadSection.style.display = 'block';
+                label.innerText = cat === 'keys' ? "Private Key Content" : "Certificate Content";
+                title.innerText = cat === 'keys' ? "Add New Key" : "Add New Certificate";
+                document.getElementById('upload-text').innerText = `Upload .${cat === 'keys' ? 'key' : 'crt'} file`;
+            }
+            renderList();
+        }
+
+        function renderList() {
+            const list = document.getElementById('list-container');
+            const search = document.getElementById('vault-search').value.toLowerCase();
+            list.innerHTML = '';
+            
+            const filtered = vaultData[activeCategory].filter(e => 
+                e.name.toLowerCase().includes(search) || (e.tag && e.tag.toLowerCase().includes(search))
+            );
+
+            filtered.forEach(entry => {
+                list.innerHTML += `
+                <div class="entry-item">
+                    <div>
+                        <h4 style="font-size: 0.95rem;">${entry.name}</h4>
+                        ${entry.tag ? `<span class="tag-badge">${entry.tag}</span>` : ''}
+                        <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 5px;">
+                            ${entry.login ? 'User: ' + entry.login : 'Data Saved'}
+                        </p>
+                    </div>
+                    <button class="btn btn-sm btn-danger" onclick="deleteEntry(${entry.id})">Delete</button>
+                </div>`;
+            });
+        }
+
+        function addEntry() {
+            const name = document.getElementById('new-entry-name').value;
+            const content = document.getElementById('new-entry-content').value;
+            const login = document.getElementById('new-entry-login').value;
+            const tag = document.getElementById('new-entry-tag').value;
+
+            if (!name || !content) return alert("Name and Content are required.");
+            
+            vaultData[activeCategory].push({ id: Date.now(), name, content, tag, login: activeCategory === 'passwords' ? login : null });
+            
+            ['new-entry-name', 'new-entry-content', 'new-entry-login', 'new-entry-tag'].forEach(id => document.getElementById(id).value = '');
+            renderList();
+        }
+
+        function deleteEntry(id) {
+            vaultData[activeCategory] = vaultData[activeCategory].filter(e => e.id !== id);
+            renderList();
+        }
+
+        function handleFileUpload(input) {
+            const file = input.files[0];
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                document.getElementById('new-entry-content').value = e.target.result;
+                if (!document.getElementById('new-entry-name').value) document.getElementById('new-entry-name').value = file.name;
+            };
+            reader.readAsText(file);
+        }
+
+        function checkStrength(p) {
+            if (activeCategory !== 'passwords') return;
+            let score = 0; if (p.length > 8) score++; if (/[A-Z]/.test(p)) score++; if (/[0-9]/.test(p)) score++; if (/[^A-Za-z0-9]/.test(p)) score++;
+            const bar = document.getElementById('strength-bar'); const txt = document.getElementById('strength-text');
+            if (p.length === 0) { bar.style.width = '0%'; txt.innerText = 'Strength: N/A'; }
+            else if (score <= 2) { bar.style.width = '33%'; bar.style.backgroundColor = 'var(--danger)'; txt.innerText = 'Strength: Weak'; }
+            else if (score === 3) { bar.style.width = '66%'; bar.style.backgroundColor = 'var(--warning)'; txt.innerText = 'Strength: Medium'; }
+            else { bar.style.width = '100%'; bar.style.backgroundColor = 'var(--success)'; txt.innerText = 'Strength: Strong'; }
+        }
+
+        // --- CRYPTO ENGINE (AES-256-GCM) ---
+        async function deriveKey(pass, salt) {
+            const enc = new TextEncoder();
+            const base = await crypto.subtle.importKey("raw", enc.encode(pass), 'PBKDF2', false, ['deriveKey']);
+            return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+        }
+
+        async function handleAccess() {
+            const pass = document.getElementById('master-key-input').value;
+            const stored = localStorage.getItem('v_blob');
+            if(!pass) return alert("Key required");
+            if(stored) {
+                try {
+                    const blob = JSON.parse(stored);
+                    const success = await decryptIntoData(blob, pass);
+                    if(success) enterVault(pass);
+                } catch(e) { alert("Corrupted data or wrong key."); }
+            } else enterVault(pass);
+        }
+
+        async function handleRestore(input) {
+            const pass = document.getElementById('master-key-input').value;
+            if(!pass) return alert("Enter key first");
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const s = await decryptIntoData(JSON.parse(e.target.result), pass);
+                if(s) { localStorage.setItem('v_blob', e.target.result); enterVault(pass); }
+            };
+            reader.readAsText(input.files[0]);
+        }
+
+        function enterVault(pass) {
+            currentKey = pass;
+            document.getElementById('auth-view').style.display = 'none';
+            document.getElementById('vault-view').style.display = 'block';
+            renderList();
+        }
+
+        async function decryptIntoData(blob, pass) {
+            try {
+                const s = Uint8Array.from(atob(blob.s), c => c.charCodeAt(0));
+                const i = Uint8Array.from(atob(blob.i), c => c.charCodeAt(0));
+                const ct = Uint8Array.from(atob(blob.ct), c => c.charCodeAt(0));
+                const key = await deriveKey(pass, s);
+                const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: i }, key, ct);
+                vaultData = JSON.parse(new TextDecoder().decode(dec));
+                return true;
+            } catch (e) { alert("Invalid key"); return false; }
+        }
+
+        async function saveAndEncrypt() {
+            const salt = crypto.getRandomValues(new Uint8Array(16));
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const key = await deriveKey(currentKey, salt);
+            const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(vaultData)));
+            const blob = { ct: btoa(String.fromCharCode(...new Uint8Array(enc))), s: btoa(String.fromCharCode(...salt)), i: btoa(String.fromCharCode(...iv)) };
+            localStorage.setItem('v_blob', JSON.stringify(blob));
+            alert("Vault encrypted and saved!");
+        }
+
+        function downloadBackup() {
+            const data = localStorage.getItem('v_blob');
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([data], {type: 'application/json'}));
+            a.download = 'vault_backup.json'; a.click();
+        }
+    </script>
+</body>
+</html>
