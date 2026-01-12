@@ -3,283 +3,364 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Secure Infrastructure Vault</title>
-    <script src="https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/argon2.umd.min.js"></script>
+    <title>Hardened Infrastructure Vault</title>
+    
+    <meta http-equiv="Content-Security-Policy" 
+          content="default-src 'self'; 
+                   script-src 'self' https://cdn.jsdelivr.net 'nonce-vault-internal-2026' 'wasm-unsafe-eval'; 
+                   style-src 'self' 'unsafe-inline'; 
+                   img-src 'self' data:; 
+                   connect-src 'self';">
+
+    <script src="https://cdn.jsdelivr.net/npm/hash-wasm@4.11.0/dist/argon2.umd.min.js" 
+            integrity="sha256-o5Q2B3wQN6xf0+9YVQJt4W3ukKO/TyKRuYLgWlHNGwc=" 
+            crossorigin="anonymous"></script>
+
     <style>
         :root {
             --bg-dark: #0f172a; --bg-light: #f8fafc; --accent: #3b82f6;
             --border: #e2e8f0; --text-main: #1e293b; --text-muted: #64748b;
-            --danger: #ef4444; --success: #10b981; --purple: #8b5cf6; --warning: #f59e0b;
+            --danger: #ef4444; --success: #10b981; --purple: #8b5cf6;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; }
         body { display: flex; min-height: 100vh; background-color: var(--bg-light); color: var(--text-main); }
-
-        #sync-banner { display: none; position: fixed; top: 0; width: 100%; background: #fff7ed; border-bottom: 1px solid #fed7aa; padding: 12px; text-align: center; font-size: 0.85rem; color: #9a3412; font-weight: 600; z-index: 1000; }
-        .sidebar { flex: 0 0 320px; background-color: var(--bg-dark); color: white; padding: 40px; display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
-        .sidebar h1 { font-size: 2.5rem; margin-bottom: 20px; line-height: 1; }
-        .sidebar-meta { margin-top: auto; padding-top: 20px; border-top: 1px solid #334155; font-size: 0.8rem; color: #94a3b8; }
-        .content-area { flex: 1; display: flex; justify-content: center; padding: 80px 20px; overflow-y: auto; }
-        .card { width: 100%; max-width: 700px; background: white; padding: 35px; border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 4px 12px rgba(0,0,0,0.03); }
-
-        .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 25px; gap: 20px; }
-        .tab { padding: 10px 0; cursor: pointer; color: var(--text-muted); font-weight: 600; border-bottom: 2px solid transparent; }
-        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-        .search-box { width: 100%; padding: 12px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 8px; outline: none; }
-
-        .entry-form { background: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 25px; }
-        .input-group { margin-bottom: 15px; position: relative; }
-        label { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 6px; color: var(--text-main); }
-        input, textarea { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; outline: none; }
         
-        /* Visibility Toggle CSS */
-        .toggle-pass { position: absolute; right: 10px; top: 32px; cursor: pointer; color: var(--text-muted); font-size: 0.8rem; user-select: none; }
-
-        .strength-container { height: 4px; background: #e2e8f0; border-radius: 2px; margin: 8px 0; overflow: hidden; }
-        .strength-bar { height: 100%; width: 0%; transition: 0.4s; }
-
-        .entry-item { padding: 15px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; background: white; }
-        .secret-area { margin-top: 12px; padding: 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; font-family: monospace; font-size: 0.85rem; word-break: break-all; color: #c2410c; display: none; }
+        #sync-banner { display: none; position: fixed; top: 0; width: 100%; background: #fff7ed; border-bottom: 1px solid #fed7aa; padding: 12px; text-align: center; font-size: 0.85rem; color: #9a3412; font-weight: 600; z-index: 1000; }
+        
+        .sidebar { flex: 0 0 300px; background-color: var(--bg-dark); color: white; padding: 40px; height: 100vh; position: sticky; top: 0; }
+        .sidebar h1 { font-size: 2.2rem; margin-bottom: 10px; }
+        
+        .content-area { flex: 1; display: flex; justify-content: center; padding: 60px 20px; overflow-y: auto; }
+        .card { width: 100%; max-width: 650px; background: white; padding: 30px; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        
+        .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 20px; gap: 15px; }
+        .tab { padding: 8px 0; cursor: pointer; color: var(--text-muted); font-weight: 600; border-bottom: 2px solid transparent; transition: 0.2s; text-transform: capitalize; }
+        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+        
+        .input-group { margin-bottom: 15px; position: relative; }
+        label { display: block; font-size: 0.75rem; font-weight: 700; margin-bottom: 5px; text-transform: uppercase; color: var(--text-muted); }
+        input, textarea { width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: 6px; outline: none; font-size: 0.95rem; }
+        
+        /* Show/Hide Toggle Styling */
+        .toggle-btn { position: absolute; right: 10px; top: 30px; cursor: pointer; background: #f1f5f9; border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 0.9rem; z-index: 5; }
+        
+        .entry-item { padding: 15px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; background: #fff; }
+        .secret-area { margin-top: 10px; padding: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; font-family: 'Monaco', monospace; font-size: 0.85rem; word-break: break-all; display: none; white-space: pre-wrap; }
         .secret-area.active { display: block; }
-
-        .btn { padding: 10px 18px; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.85rem; transition: 0.2s; color: white; }
-        .btn:disabled { opacity: 0.6; cursor: wait; }
+        
+        .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; color: white; transition: 0.2s; font-size: 0.9rem; }
         .btn-accent { background: var(--accent); }
         .btn-purple { background: var(--purple); }
         .btn-danger { background: var(--danger); }
-        .btn-success { background: var(--success) !important; }
-        .tag-badge { background: #e0f2fe; color: #0369a1; font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; margin-left: 8px; }
-        .upload-zone { border: 2px dashed var(--border); padding: 15px; text-align: center; border-radius: 10px; cursor: pointer; color: var(--text-muted); margin-bottom: 15px; font-size: 0.85rem; }
+        
+        .upload-zone { border: 2px dashed var(--border); padding: 20px; text-align: center; border-radius: 8px; cursor: pointer; color: var(--text-muted); margin-bottom: 15px; font-size: 0.85rem; background: #fafafa; }
+        .upload-zone:hover { border-color: var(--accent); background: #f0f7ff; }
     </style>
 </head>
 <body>
 
-<div id="sync-banner">⚠️ New changes made. Download a fresh backup to keep your data safe.</div>
+<div id="sync-banner">⚠️ Local changes detected. Download a fresh backup to keep browsers in sync.</div>
 
 <section class="sidebar">
     <h1>Vault</h1>
-    <p style="color: #94a3b8; font-size: 0.9rem;">Hardened Infrastructure Manager</p>
-    <div class="sidebar-meta" id="sidebar-meta" style="display:none">
-        <p><b>Last Session Activity:</b></p>
-        <p id="last-update">No changes yet</p>
-        <p id="entry-count" style="margin-top: 5px;">0 entries stored</p>
+    <div id="sidebar-meta" style="display:none">
+        <p id="last-update" style="font-size: 0.8rem; color: #94a3b8;"></p>
+        <p id="entry-count" style="margin-top: 5px; font-size: 0.8rem; color: #94a3b8;"></p>
     </div>
 </section>
 
 <main class="content-area">
     <div id="auth-view" class="card">
-        <div class="tabs" id="auth-tabs">
-            <div id="tab-unlock" class="tab" onclick="switchAuth('unlock')" style="display:none">Unlock Vault</div>
-            <div id="tab-new" class="tab active" onclick="switchAuth('new')">New Vault</div>
-            <div id="tab-restore" class="tab" onclick="switchAuth('restore')">Restore Backup</div>
+        <div class="tabs">
+            <div id="tab-unlock" class="tab" data-mode="unlock" style="display:none">Unlock</div>
+            <div id="tab-new" class="tab active" data-mode="new">New Vault</div>
+            <div id="tab-restore" class="tab" data-mode="restore">Restore</div>
         </div>
 
         <div id="auth-unlock" style="display:none">
-            <h2>Unlock Vault</h2>
             <div class="input-group">
                 <label>Master Key</label>
-                <input type="password" id="unlock-key" placeholder="Enter passphrase">
-                <span class="toggle-pass" onclick="toggleVisibility('unlock-key')">👁️</span>
+                <input type="password" id="unlock-key">
+                <button class="toggle-btn" data-target="unlock-key">👁️</button>
             </div>
-            <button id="unlock-btn" class="btn btn-accent" style="width:100%" onclick="handleUnlockLocal()">Unlock Vault</button>
-            <p style="text-align:center; margin-top:15px; font-size:0.75rem; color:var(--danger); cursor:pointer" onclick="clearLocalData()">Wipe Local Data</p>
+            <button id="unlock-btn" class="btn btn-accent" style="width:100%">Access Vault</button>
         </div>
 
         <div id="auth-new">
-            <h2>Create New Vault</h2>
             <div class="input-group">
-                <label>Master Key</label>
-                <input type="password" id="new-key" oninput="checkStrength('new-key', 'strength-bar-init')" placeholder="Strong passphrase">
-                <span class="toggle-pass" onclick="toggleVisibility('new-key')">👁️</span>
-                <div class="strength-container"><div id="strength-bar-init" class="strength-bar"></div></div>
+                <label>Create Master Key</label>
+                <input type="password" id="new-key">
+                <button class="toggle-btn" data-target="new-key">👁️</button>
             </div>
             <div class="input-group">
                 <label>Confirm Master Key</label>
-                <input type="password" id="new-confirm" placeholder="Repeat passphrase">
-                <span class="toggle-pass" onclick="toggleVisibility('new-confirm')">👁️</span>
+                <input type="password" id="new-confirm">
+                <button class="toggle-btn" data-target="new-confirm">👁️</button>
             </div>
-            <button id="create-btn" class="btn btn-accent" style="width:100%" onclick="initNewVault()">Initialize Vault</button>
+            <button id="create-btn" class="btn btn-accent" style="width:100%">Initialize Encrypted Storage</button>
         </div>
 
         <div id="auth-restore" style="display:none">
-            <h2>Restore Backup</h2>
-            <div class="upload-zone" onclick="document.getElementById('file-input').click()">
-                <span id="file-label">Select vault_backup.json</span>
-                <input type="file" id="file-input" style="display:none" onchange="stageFile(this)">
+            <div class="upload-zone" id="restore-zone">
+                <span id="file-label">Click to upload <b>vault_backup.json</b></span>
+                <input type="file" id="file-input" style="display:none" accept=".json">
             </div>
             <div class="input-group">
-                <label>Master Key</label>
-                <input type="password" id="restore-key" placeholder="Enter original passphrase">
-                <span class="toggle-pass" onclick="toggleVisibility('restore-key')">👁️</span>
+                <label>Master Key for this Backup</label>
+                <input type="password" id="restore-key">
+                <button class="toggle-btn" data-target="restore-key">👁️</button>
             </div>
-            <button id="restore-btn" class="btn btn-purple" style="width:100%" onclick="initRestoreVault()">Decrypt & Restore</button>
+            <button id="restore-btn" class="btn btn-purple" style="width:100%">Restore & Decrypt</button>
         </div>
     </div>
 
     <div id="vault-view" class="card" style="display:none">
-        <div class="tabs">
-            <div class="tab active" onclick="switchTab('passwords')">Passwords</div>
-            <div class="tab" onclick="switchTab('keys')">Keys</div>
-            <div class="tab" onclick="switchTab('certs')">Certs</div>
-            <div class="tab" onclick="switchTab('security')" style="color: var(--danger)">Security</div>
+        <div class="tabs" id="main-tabs">
+            <div class="tab active" data-tab="passwords">Passwords</div>
+            <div class="tab" data-tab="keys">Keys</div>
+            <div class="tab" data-tab="certs">Certs</div>
+            <div class="tab" data-tab="security" style="color: var(--danger)">Security</div>
         </div>
 
         <div id="vault-content-section">
-            <input type="text" id="v-search" class="search-box" placeholder="Filter assets..." oninput="renderList()">
-            <div class="entry-form">
-                <div id="file-content-section" style="display:none">
-                    <div class="upload-zone" onclick="document.getElementById('content-uploader').click()">Import File Content<input type="file" id="content-uploader" style="display:none" onchange="importContent(this)"></div>
+            <input type="text" id="v-search" style="width:100%; padding:12px; border:1px solid var(--border); border-radius:8px; margin-bottom:15px" placeholder="Search entries...">
+            
+            <div id="importer-ui" style="display:none">
+                <div class="upload-zone" id="content-zone">
+                    <b>Drop or Click to Import File Content</b> (PEM, CRT, KEY, etc.)
+                    <input type="file" id="content-uploader" style="display:none">
                 </div>
-                <div class="form-header" style="display:flex; justify-content:space-between; margin-bottom: 10px;">
-                    <label>Add Infrastructure Asset</label>
-                    <button id="gen-btn" class="btn btn-purple" style="padding:4px 10px; font-size:0.75rem" onclick="generate()">Generate Password</button>
-                </div>
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px">
-                    <input type="text" id="n-name" placeholder="Name"><input type="text" id="n-tag" placeholder="Tag">
-                </div>
-                <div id="login-field" style="margin-top:10px"><input type="text" id="n-login" placeholder="Username/Login"></div>
-                <textarea id="n-content" style="margin-top:10px; height:80px" placeholder="Secret content..."></textarea>
-                <button id="add-btn" class="btn btn-accent" style="width:100%; margin-top:10px" onclick="addEntry()">Add & Auto-Encrypt</button>
             </div>
-            <div id="list-container"></div>
+
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px">
+                <input type="text" id="n-name" placeholder="Title / Alias">
+                <input type="text" id="n-tag" placeholder="Tag">
+            </div>
+            <textarea id="n-content" style="height:120px; margin-bottom:10px" placeholder="Paste secret content here..."></textarea>
+            <button id="add-btn" class="btn btn-accent" style="width:100%">Encrypt & Save Entry</button>
+            
+            <div id="list-container" style="margin-top:20px"></div>
         </div>
 
         <div id="security-section" style="display:none">
-            <h3>Security</h3>
-            <div class="entry-form">
-                <label>Change Master Password</label>
-                <div class="input-group">
-                    <input type="password" id="change-pass-new" oninput="checkStrength('change-pass-new', 'strength-bar-change')" placeholder="New password">
-                    <span class="toggle-pass" onclick="toggleVisibility('change-pass-new')">👁️</span>
-                    <div class="strength-container"><div id="strength-bar-change" class="strength-bar"></div></div>
-                </div>
-                <div class="input-group">
-                    <input type="password" id="change-pass-confirm" placeholder="Confirm password">
-                    <span class="toggle-pass" onclick="toggleVisibility('change-pass-confirm')">👁️</span>
-                </div>
-                <button class="btn btn-danger" style="width:100%" onclick="handleChangePassword()">Update Vault Key</button>
+            <h3>Master Security Settings</h3>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:20px">Changing your key will re-encrypt all stored data with a fresh salt.</p>
+            <div class="input-group">
+                <label>New Master Key</label>
+                <input type="password" id="change-pass-new">
+                <button class="toggle-btn" data-target="change-pass-new">👁️</button>
             </div>
-            <button class="btn btn-danger" style="width:100%; opacity:0.8" onclick="clearLocalData()">Wipe All Local Data</button>
+            <div class="input-group">
+                <label>Confirm New Key</label>
+                <input type="password" id="change-pass-confirm">
+                <button class="toggle-btn" data-target="change-pass-confirm">👁️</button>
+            </div>
+            <button id="change-pass-btn" class="btn btn-danger" style="width:100%">Update Master Key</button>
+            <button id="wipe-btn" class="btn btn-danger" style="width:100%; margin-top:30px; opacity:0.6">Wipe All Browser Data</button>
         </div>
 
         <div style="margin-top:30px; border-top:1px solid var(--border); padding-top:20px; display:flex; gap:10px">
-            <button class="btn" style="flex:1; background:#f1f5f9; color:#475569" onclick="downloadBackup()">Download Backup JSON</button>
-            <button class="btn btn-danger" onclick="lock()">Lock Vault</button>
+            <button id="export-btn" class="btn" style="flex:1; background:#f1f5f9; color:#475569">Download Backup (.json)</button>
+            <button id="lock-btn" class="btn btn-danger">Lock Session</button>
         </div>
     </div>
 </main>
 
-<script>
+<script nonce="vault-internal-2026">
     let vaultData = { passwords: [], keys: [], certs: [] };
-    let currentKey = null, activeTab = 'passwords', stagedBlob = null, hasNewChanges = false;
+    let currentKey = null, activeTab = 'passwords', stagedBlob = null;
 
-    window.onload = () => { if(localStorage.getItem('v_blob')) { document.getElementById('tab-unlock').style.display = 'block'; switchAuth('unlock'); } else { switchAuth('new'); } };
-
-    // --- NEW: TOGGLE VISIBILITY ---
-    function toggleVisibility(id) {
-        const input = document.getElementById(id);
-        input.type = input.type === 'password' ? 'text' : 'password';
-    }
-
+    // --- CRYPTOGRAPHY ---
     async function deriveKey(pass, salt) {
-        const hash = await hashwasm.argon2id({ password: pass, salt: salt, iterations: 3, parallelism: 4, memorySize: 65536, hashLength: 32, outputType: 'binary' });
+        const hash = await hashwasm.argon2id({ 
+            password: pass, salt: salt, iterations: 3, parallelism: 4, memorySize: 65536, hashLength: 32, outputType: 'binary' 
+        });
         return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
     }
 
+    async function decryptBlob(blob, pass) {
+        try {
+            const s = Uint8Array.from(atob(blob.s), c => c.charCodeAt(0));
+            const i = Uint8Array.from(atob(blob.i), c => c.charCodeAt(0));
+            const ct = Uint8Array.from(atob(blob.ct), c => c.charCodeAt(0));
+            const key = await deriveKey(pass, s);
+            const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: i }, key, ct);
+            return JSON.parse(new TextDecoder().decode(dec));
+        } catch (e) { return null; }
+    }
+
     async function autoSave() {
+        if(!currentKey) return;
         const s = crypto.getRandomValues(new Uint8Array(16)), i = crypto.getRandomValues(new Uint8Array(12));
         const key = await deriveKey(currentKey, s);
         const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: i }, key, new TextEncoder().encode(JSON.stringify(vaultData)));
-        localStorage.setItem('v_blob', JSON.stringify({ ct: btoa(String.fromCharCode(...new Uint8Array(enc))), s: btoa(String.fromCharCode(...s)), i: btoa(String.fromCharCode(...i)) }));
-        hasNewChanges = true; document.getElementById('sync-banner').style.display = 'block'; updateSidebar();
+        const blob = { 
+            ct: btoa(String.fromCharCode(...new Uint8Array(enc))), 
+            s: btoa(String.fromCharCode(...s)), 
+            i: btoa(String.fromCharCode(...i)) 
+        };
+        localStorage.setItem('v_blob', JSON.stringify(blob));
+        document.getElementById('sync-banner').style.display = 'block';
+        updateMeta();
     }
 
-    async function decryptIntoData(blob, pass) {
-        try {
-            const s = Uint8Array.from(atob(blob.s), c => c.charCodeAt(0)), i = Uint8Array.from(atob(blob.i), c => c.charCodeAt(0)), ct = Uint8Array.from(atob(blob.ct), c => c.charCodeAt(0));
-            const key = await deriveKey(pass, s);
-            const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: i }, key, ct);
-            vaultData = JSON.parse(new TextDecoder().decode(dec)); return true;
-        } catch (e) { return false; }
-    }
-
-    function switchAuth(m) { ['unlock', 'new', 'restore'].forEach(mode => { const el = document.getElementById('auth-' + mode); if(el) el.style.display = (m === mode) ? 'block' : 'none'; const tab = document.getElementById('tab-' + mode); if(tab) tab.classList.toggle('active', m === mode); }); }
+    // --- UI ENGINE ---
+    function escapeHTML(str) { const p = document.createElement('p'); p.textContent = str; return p.innerHTML; }
     
-    async function handleUnlockLocal() {
-        const p = document.getElementById('unlock-key').value;
-        const success = await decryptIntoData(JSON.parse(localStorage.getItem('v_blob')), p);
-        if(success) { currentKey = p; openVault(); } else { alert("Incorrect Key"); }
-    }
-
-    async function initNewVault() {
-        const p1 = document.getElementById('new-key').value, p2 = document.getElementById('new-confirm').value;
-        if(p1 !== p2 || p1.length < 8) return alert("Mismatch or too short.");
-        currentKey = p1; await autoSave(); openVault(); hasNewChanges = false; document.getElementById('sync-banner').style.display = 'none';
-    }
-
-    async function initRestoreVault() {
-        const p = document.getElementById('restore-key').value;
-        if(await decryptIntoData(stagedBlob, p)) { currentKey = p; localStorage.setItem('v_blob', JSON.stringify(stagedBlob)); openVault(); } else { alert("Fail."); }
-    }
-
-    function openVault() { document.getElementById('auth-view').style.display = 'none'; document.getElementById('vault-view').style.display = 'block'; document.getElementById('sidebar-meta').style.display = 'block'; renderList(); updateSidebar(); }
-    
-    function switchTab(t) {
-        activeTab = t; document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.innerText.toLowerCase() === t.toLowerCase()));
-        document.getElementById('vault-content-section').style.display = (t === 'security') ? 'none' : 'block';
-        document.getElementById('security-section').style.display = (t === 'security') ? 'block' : 'none';
-        if(t !== 'security') {
-            document.getElementById('login-field').style.display = t === 'passwords' ? 'block' : 'none';
-            document.getElementById('gen-btn').style.display = t === 'passwords' ? 'block' : 'none';
-            document.getElementById('file-content-section').style.display = t === 'passwords' ? 'none' : 'block';
-            renderList();
-        }
+    function updateMeta() {
+        document.getElementById('sidebar-meta').style.display = 'block';
+        document.getElementById('last-update').innerText = "Sync: " + new Date().toLocaleTimeString();
+        const total = (vaultData.passwords?.length || 0) + (vaultData.keys?.length || 0) + (vaultData.certs?.length || 0);
+        document.getElementById('entry-count').innerText = total + " items secured";
     }
 
     function renderList() {
         const container = document.getElementById('list-container');
-        const query = document.getElementById('v-search').value.toLowerCase();
         container.innerHTML = '';
-        vaultData[activeTab].filter(e => e.name.toLowerCase().includes(query) || (e.tag && e.tag.toLowerCase().includes(query))).forEach(e => {
+        const query = document.getElementById('v-search').value.toLowerCase();
+        
+        (vaultData[activeTab] || []).filter(e => e.name.toLowerCase().includes(query)).forEach(e => {
             const div = document.createElement('div'); div.className = 'entry-item';
-            div.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:start">
-                <div><h4>${e.name}<span class="tag-badge">${e.tag || ''}</span></h4><p style="font-size:0.75rem">${e.mod}</p></div>
-                <div style="display:flex; gap:6px">
-                    <button class="btn btn-accent" style="padding:4px 8px" onclick="reveal(${e.id})">View</button>
-                    <button class="btn btn-purple" id="cp-${e.id}" style="padding:4px 8px" onclick="copySecret(${e.id})">Copy</button>
-                    <button class="btn btn-danger" style="padding:4px 8px" onclick="remove(${e.id})">×</button>
+            div.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center;">
+                <b>${escapeHTML(e.name)}</b>
+                <div>
+                    <button class="btn btn-accent btn-sm act-v" data-id="${e.id}" style="padding:4px 10px; font-size:0.75rem;">View</button>
+                    <button class="btn btn-purple btn-sm act-c" id="cp-${e.id}" data-id="${e.id}" style="padding:4px 10px; font-size:0.75rem;">Copy</button>
+                    <button class="btn btn-danger btn-sm act-d" data-id="${e.id}" style="padding:4px 10px; font-size:0.75rem;">×</button>
                 </div>
             </div><div id="sec-${e.id}" class="secret-area"></div>`;
             container.appendChild(div);
         });
+
+        document.querySelectorAll('.act-v').forEach(b => b.onclick = () => {
+            const el = document.getElementById(`sec-${b.dataset.id}`);
+            if(el.classList.contains('active')) { el.textContent = ''; el.classList.remove('active'); }
+            else { el.textContent = vaultData[activeTab].find(x => x.id == b.dataset.id).content; el.classList.add('active'); }
+        });
+        document.querySelectorAll('.act-c').forEach(b => b.onclick = async () => {
+            const secret = vaultData[activeTab].find(x => x.id == b.dataset.id).content;
+            await navigator.clipboard.writeText(secret);
+            const originalText = b.innerText; b.innerText = "Saved!"; setTimeout(() => b.innerText = originalText, 1500);
+        });
+        document.querySelectorAll('.act-d').forEach(b => b.onclick = async () => {
+            if(confirm("Delete this entry?")) {
+                vaultData[activeTab] = vaultData[activeTab].filter(x => x.id != b.dataset.id);
+                await autoSave(); renderList();
+            }
+        });
     }
 
-    async function copySecret(id) {
-        const btn = document.getElementById(`cp-${id}`);
-        const secret = vaultData[activeTab].find(x => x.id === id).content;
-        await navigator.clipboard.writeText(secret);
-        btn.innerText = "Copied!"; btn.classList.add('btn-success');
-        setTimeout(() => { btn.innerText = "Copy"; btn.classList.remove('btn-success'); navigator.clipboard.writeText(""); }, 5000);
-    }
+    // --- INITIALIZATION ---
+    document.addEventListener('DOMContentLoaded', () => {
+        // Toggle Logic
+        document.querySelectorAll('.toggle-btn').forEach(btn => {
+            btn.onclick = (e) => {
+                e.preventDefault();
+                const input = document.getElementById(btn.dataset.target);
+                if(input.type === 'password') { input.type = 'text'; btn.innerText = '🔒'; }
+                else { input.type = 'password'; btn.innerText = '👁️'; }
+            };
+        });
 
-    async function addEntry() {
-        const name = document.getElementById('n-name').value, content = document.getElementById('n-content').value;
-        if(!name || !content) return;
-        vaultData[activeTab].push({ id: Date.now(), name, content, tag: document.getElementById('n-tag').value, mod: new Date().toLocaleTimeString() });
-        ['n-name','n-tag','n-login','n-content'].forEach(id => document.getElementById(id).value = '');
-        await autoSave(); renderList();
-    }
+        if(localStorage.getItem('v_blob')) {
+            document.getElementById('tab-unlock').style.display = 'block';
+            document.getElementById('auth-new').style.display = 'none';
+            document.getElementById('auth-unlock').style.display = 'block';
+            document.querySelector('.tab[data-mode="unlock"]').classList.add('active');
+            document.querySelector('.tab[data-mode="new"]').classList.remove('active');
+        }
 
-    async function remove(id) { vaultData[activeTab] = vaultData[activeTab].filter(x => x.id !== id); await autoSave(); renderList(); }
-    function reveal(id) { const el = document.getElementById(`sec-${id}`); if(el.classList.contains('active')) el.classList.remove('active'); else { el.innerText = vaultData[activeTab].find(x => x.id === id).content; el.classList.add('active'); } }
-    function updateSidebar() { document.getElementById('last-update').innerText = "Encrypted: " + new Date().toLocaleTimeString(); document.getElementById('entry-count').innerText = (vaultData.passwords.length + vaultData.keys.length + vaultData.certs.length) + " Assets"; }
-    function downloadBackup() { const blob = localStorage.getItem('v_blob'); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([blob], {type: 'application/json'})); a.download = 'vault_backup.json'; a.click(); hasNewChanges = false; document.getElementById('sync-banner').style.display = 'none'; }
-    function lock() { window.location.reload(); }
-    function clearLocalData() { if(confirm("Wipe all data?")) { localStorage.clear(); window.location.reload(); } }
-    function generate() { document.getElementById('n-content').value = Array.from(crypto.getRandomValues(new Uint32Array(16))).map(x => "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789!@#$%^&*".charAt(x % 62)).join(''); }
-    function checkStrength(inputId, barId) { const p = document.getElementById(inputId).value, b = document.getElementById(barId); let s = 0; if(p.length > 8) s++; if(/[A-Z]/.test(p)) s++; if(/[0-9]/.test(p)) s++; if(/[^A-Za-z0-9]/.test(p)) s++; const c = ['#ef4444', '#f59e0b', '#3b82f6', '#10b981']; b.style.width = p.length ? (s+1)*25 + '%' : '0%'; b.style.background = c[s] || c[0]; }
-    function stageFile(i) { const r = new FileReader(); r.onload = (e) => { stagedBlob = JSON.parse(e.target.result); document.getElementById('file-label').innerText = "File Staged."; }; r.readAsText(i.files[0]); }
-    function importContent(input) { const r = new FileReader(); r.onload = (e) => { document.getElementById('n-content').value = e.target.result; if(!document.getElementById('n-name').value) document.getElementById('n-name').value = input.files[0].name; }; r.readAsText(input.files[0]); }
-    async function handleChangePassword() { const n1 = document.getElementById('change-pass-new').value, n2 = document.getElementById('change-pass-confirm').value; if(n1 !== n2 || n1.length < 8) return alert("Keys mismatch."); currentKey = n1; await autoSave(); alert("Updated."); }
+        // Tab Switching
+        document.querySelectorAll('.tab[data-mode]').forEach(el => el.onclick = () => {
+            ['unlock', 'new', 'restore'].forEach(m => document.getElementById('auth-' + m).style.display = 'none');
+            document.getElementById('auth-' + el.dataset.mode).style.display = 'block';
+            document.querySelectorAll('.tab[data-mode]').forEach(t => t.classList.remove('active'));
+            el.classList.add('active');
+        });
+
+        document.querySelectorAll('.tab[data-tab]').forEach(el => el.onclick = () => {
+            activeTab = el.dataset.tab;
+            document.querySelectorAll('.tab[data-tab]').forEach(t => t.classList.remove('active'));
+            el.classList.add('active');
+            document.getElementById('vault-content-section').style.display = (activeTab === 'security') ? 'none' : 'block';
+            document.getElementById('security-section').style.display = (activeTab === 'security') ? 'block' : 'none';
+            document.getElementById('importer-ui').style.display = (activeTab === 'keys' || activeTab === 'certs') ? 'block' : 'none';
+            renderList();
+        });
+
+        // Functional Buttons
+        document.getElementById('unlock-btn').onclick = async () => {
+            const p = document.getElementById('unlock-key').value;
+            const data = await decryptBlob(JSON.parse(localStorage.getItem('v_blob')), p);
+            if(data) { 
+                currentKey = p; vaultData = data; 
+                document.getElementById('auth-view').style.display = 'none'; 
+                document.getElementById('vault-view').style.display = 'block'; 
+                renderList(); updateMeta(); 
+            } else alert("Invalid Master Key");
+        };
+
+        document.getElementById('create-btn').onclick = async () => {
+            const p1 = document.getElementById('new-key').value, p2 = document.getElementById('new-confirm').value;
+            if(p1 === p2 && p1.length >= 8) { 
+                currentKey = p1; await autoSave(); 
+                document.getElementById('auth-view').style.display = 'none'; 
+                document.getElementById('vault-view').style.display = 'block'; 
+                renderList(); updateMeta();
+            } else alert("Mismatch or key too short (min 8).");
+        };
+
+        document.getElementById('restore-btn').onclick = async () => {
+            const p = document.getElementById('restore-key').value;
+            if(!stagedBlob) return alert("Select a file first.");
+            const data = await decryptBlob(stagedBlob, p);
+            if(data) { 
+                currentKey = p; vaultData = data; await autoSave(); 
+                document.getElementById('auth-view').style.display = 'none'; 
+                document.getElementById('vault-view').style.display = 'block'; 
+                renderList(); updateMeta(); 
+            } else alert("Restoration failed: Wrong key.");
+        };
+
+        document.getElementById('add-btn').onclick = async () => {
+            const n = document.getElementById('n-name').value, c = document.getElementById('n-content').value;
+            if(!n || !c) return;
+            vaultData[activeTab].push({ id: Date.now(), name: n, content: c, tag: document.getElementById('n-tag').value });
+            document.getElementById('n-name').value = ''; document.getElementById('n-content').value = '';
+            await autoSave(); renderList();
+        };
+
+        document.getElementById('change-pass-btn').onclick = async () => {
+            const n1 = document.getElementById('change-pass-new').value, n2 = document.getElementById('change-pass-confirm').value;
+            if(n1 === n2 && n1.length >= 8) { currentKey = n1; await autoSave(); alert("Master key updated."); }
+            else alert("Error: Keys mismatch or too short.");
+        };
+
+        // File/IO Handlers
+        document.getElementById('restore-zone').onclick = () => document.getElementById('file-input').click();
+        document.getElementById('file-input').onchange = (e) => {
+            const r = new FileReader(); r.onload = (ev) => { 
+                try { stagedBlob = JSON.parse(ev.target.result); document.getElementById('file-label').innerHTML = "✅ <b>Backup Staged</b>"; }
+                catch(err) { alert("Invalid backup file."); }
+            }; r.readAsText(e.target.files[0]);
+        };
+
+        document.getElementById('content-zone').onclick = () => document.getElementById('content-uploader').click();
+        document.getElementById('content-uploader').onchange = (e) => {
+            const r = new FileReader(); r.onload = (ev) => { 
+                document.getElementById('n-content').value = ev.target.result; 
+                if(!document.getElementById('n-name').value) document.getElementById('n-name').value = e.target.files[0].name;
+            }; r.readAsText(e.target.files[0]);
+        };
+
+        document.getElementById('export-btn').onclick = () => {
+            const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([localStorage.getItem('v_blob')], {type: 'application/json'})); a.download = `vault_backup_${new Date().toISOString().slice(0,10)}.json`; a.click(); document.getElementById('sync-banner').style.display = 'none';
+        };
+
+        document.getElementById('lock-btn').onclick = () => window.location.reload();
+        document.getElementById('wipe-btn').onclick = () => { if(confirm("Wipe all data?")) { localStorage.clear(); window.location.reload(); }};
+        document.getElementById('v-search').oninput = renderList;
+    });
 </script>
 </body>
 </html>
