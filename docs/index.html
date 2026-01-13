@@ -283,6 +283,11 @@ let activeTab = 'passwords';
 let stagedBlob = null;
 let db = null;
 
+// UPDATED: Password sanitizer for cross-platform consistency (trims + NFC normalization)
+function sanitizePassword(pass) {
+    return pass.trim().normalize("NFC");
+}
+
 // IndexedDB Helpers
 async function openDB() {
     if (db) return db;
@@ -335,8 +340,9 @@ async function clearDB() {
 
 // Crypto
 async function deriveKey(pass, salt) {
+    const sanitized = sanitizePassword(pass);
     const hash = await hashwasm.argon2id({
-        password: pass,
+        password: sanitized,
         salt: salt,
         iterations: 5,
         parallelism: 1,
@@ -355,7 +361,8 @@ async function decryptBlob(blob, pass) {
         const ct = Uint8Array.from(atob(blob.ct), c => c.charCodeAt(0));
         const h = Uint8Array.from(atob(blob.h), c => c.charCodeAt(0));
 
-        const hmacKeyRaw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pass + "hmac"));
+        const sanitized = sanitizePassword(pass);
+        const hmacKeyRaw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sanitized + "hmac"));
         const hmacKey = await crypto.subtle.importKey("raw", hmacKeyRaw, { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
         const toVerify = new Uint8Array([...s, ...i, ...ct]);
         const valid = await crypto.subtle.verify("HMAC", hmacKey, h, toVerify);
@@ -379,7 +386,8 @@ async function autoSave() {
 
         const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: i }, key, new TextEncoder().encode(JSON.stringify(vaultData)));
 
-        const hmacKeyRaw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(currentKey + "hmac"));
+        const sanitized = sanitizePassword(currentKey);
+        const hmacKeyRaw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sanitized + "hmac"));
         const hmacKey = await crypto.subtle.importKey("raw", hmacKeyRaw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
         const toSign = new Uint8Array([...s, ...i, ...new Uint8Array(enc)]);
         const hmac = await crypto.subtle.sign("HMAC", hmacKey, toSign);
@@ -513,7 +521,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     document.getElementById('unlock-btn').onclick = async () => {
-        const p = document.getElementById('unlock-key').value;
+        const raw = document.getElementById('unlock-key').value;
+        const p = sanitizePassword(raw);
         const blob = await getBlob();
         const data = await decryptBlob(blob, p);
         if (data) {
@@ -529,8 +538,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     document.getElementById('create-btn').onclick = async () => {
-        const p1 = document.getElementById('new-key').value;
-        const p2 = document.getElementById('new-confirm').value;
+        const raw1 = document.getElementById('new-key').value;
+        const raw2 = document.getElementById('new-confirm').value;
+        const p1 = sanitizePassword(raw1);
+        const p2 = sanitizePassword(raw2);
         if (p1 !== p2 || p1.length < 10) {
             alert("Keys must match and be at least 10 characters.");
             return;
@@ -589,7 +600,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     document.getElementById('restore-btn').onclick = async () => {
-        const p = document.getElementById('restore-key').value;
+        const raw = document.getElementById('restore-key').value;
+        const p = sanitizePassword(raw);
         const data = await decryptBlob(stagedBlob, p);
         if (data) {
             currentKey = p;
@@ -617,8 +629,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     document.getElementById('change-pass-btn').onclick = async () => {
-        const n1 = document.getElementById('change-pass-new').value;
-        const n2 = document.getElementById('change-pass-confirm').value;
+        const rawN1 = document.getElementById('change-pass-new').value;
+        const rawN2 = document.getElementById('change-pass-confirm').value;
+        const n1 = sanitizePassword(rawN1);
+        const n2 = sanitizePassword(rawN2);
         if (n1 !== n2 || n1.length < 10) {
             alert("Keys must match and be at least 10 characters.");
             return;
