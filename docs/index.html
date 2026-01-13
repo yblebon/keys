@@ -590,14 +590,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('export-btn').onclick = async () => {
         const blob = await getBlob();
         if (!blob) return;
-        const pkg = { version: VAULT_VERSION, ts: new Date().toISOString(), payload: blob };
+
+        // The package now uses the dynamic VAULT_VERSION from config.json
+        const pkg = { 
+            version: VAULT_VERSION, 
+            ts: new Date().toISOString(), 
+            payload: blob 
+        };
+
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([JSON.stringify(pkg, null, 2)], {type: 'application/json'}));
-        a.download = `vault_backup_v${VAULT_VERSION}.json`;
+        
+        // Dynamically sets the filename, e.g., vault_backup_v1.1.5.json
+        a.download = `vault_backup_v${VAULT_VERSION}.json`; 
+        
         a.click();
+        
+        // Clear the "unsaved changes" banner once downloaded
         document.getElementById('sync-banner').style.display = 'none';
     };
-
     document.getElementById('restore-zone').onclick = () => document.getElementById('file-input').click();
     document.getElementById('file-input').onchange = e => {
         const file = e.target.files[0];
