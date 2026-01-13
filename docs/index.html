@@ -191,6 +191,7 @@
 
 <section class="sidebar">
     <h1>Vault</h1>
+    <span id="app-version" class="version-tag">Loading version...</span>
     <span class="version-tag">Engine v1.1.3 (IndexedDB)</span>
     <div id="sidebar-meta" style="display:none; margin-top:30px;">
         <p id="last-update" style="font-size: 0.8rem; color: #94a3b8;"></p>
@@ -271,7 +272,7 @@
 </main>
 
 <script nonce="vault-internal-2026">
-const VAULT_VERSION = "1.1.3";
+let VAULT_VERSION = "0.0.0";
 const DB_NAME = "VaultDB";
 const DB_VERSION = 1;
 const STORE_NAME = "vault";
@@ -282,6 +283,19 @@ let currentKey = null;
 let activeTab = 'passwords';
 let stagedBlob = null;
 let db = null;
+
+
+async function loadVersion() {
+    try {
+        const response = await fetch('config.json');
+        const config = await response.json();
+        VAULT_VERSION = config.version;
+        document.getElementById('app-version').innerText = `Engine v${VAULT_VERSION} (IndexedDB)`;
+    } catch (err) {
+        console.error("Failed to load version config:", err);
+        document.getElementById('app-version').innerText = "Engine v1.1.3 (Offline)";
+    }
+}
 
 // UPDATED: Password sanitizer for cross-platform consistency (trims + NFC normalization)
 function sanitizePassword(pass) {
@@ -477,6 +491,9 @@ function renderList() {
 
 // Event listeners
 document.addEventListener('DOMContentLoaded', async () => {
+
+    await loadVersion();
+
     try {
         await openDB();
     } catch (e) {
