@@ -3,694 +3,889 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hardened Infrastructure Vault</title>
-    
-    <meta http-equiv="Content-Security-Policy" 
-          content="default-src 'self'; 
-                   script-src 'self' https://cdn.jsdelivr.net 'nonce-vault-internal-2026' 'wasm-unsafe-eval'; 
-                   style-src 'self' 'unsafe-inline'; 
-                   img-src 'self' data:; 
-                   connect-src 'self';">
+    <title>Vault</title>
 
-    <script src="https://cdn.jsdelivr.net/npm/hash-wasm@4.11.0/dist/argon2.umd.min.js" 
-            integrity="sha256-o5Q2B3wQN6xf0+9YVQJt4W3ukKO/TyKRuYLgWlHNGwc=" 
+    <!--
+    ═══════════════════════════════════════════════════════════════
+    SECURITY POLICY — v1.1.0
+
+    FIX (Critical): The original code used a STATIC nonce
+    ('nonce-vault-internal-2026') hardcoded in both the CSP header
+    and the inline <script> tag. A static nonce provides zero XSS
+    protection — any attacker who can inject a script simply adds
+    the known nonce value and the browser executes it.
+
+    Fix: All JavaScript is moved to vault.js (same origin).
+    The CSP now uses `script-src 'self'`, which allows only
+    scripts loaded from the same origin. No nonce is needed.
+
+    Remaining known issue: `style-src 'unsafe-inline'` permits
+    CSS injection attacks. A future improvement is to move all
+    inline style attributes to vault.css and remove this directive.
+    ═══════════════════════════════════════════════════════════════
+    -->
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'none';
+        script-src  'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval';
+        style-src   'self' 'unsafe-inline';
+        img-src     'self' data:;
+        connect-src 'self';
+        font-src    'self';
+        form-action 'none';
+        base-uri    'self';
+    ">
+
+    <!-- hash-wasm Argon2id — SRI enforced -->
+    <script src="https://cdn.jsdelivr.net/npm/hash-wasm@4.11.0/dist/argon2.umd.min.js"
+            integrity="sha256-o5Q2B3wQN6xf0+9YVQJt4W3ukKO/TyKRuYLgWlHNGwc="
             crossorigin="anonymous"></script>
 
+    <!-- All application logic — loaded from same origin ('self') -->
+    <script src="vault.js" defer></script>
+
     <style>
+        /* ── Reset & base ──────────────────────────────────────────────────── */
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
         :root {
-            --bg-dark: #0f172a; --bg-light: #f8fafc; --accent: #3b82f6;
-            --border: #e2e8f0; --text-main: #1e293b; --text-muted: #64748b;
-            --danger: #ef4444; --success: #10b981; --purple: #8b5cf6;
+            --bg:             #080c16;
+            --bg2:            #0c1120;
+            --surface:        #111827;
+            --surface2:       #182035;
+            --surface3:       #1e2a42;
+            --border:         rgba(99,110,230,0.16);
+            --border-hover:   rgba(99,110,230,0.35);
+            --border-focus:   rgba(99,110,230,0.6);
+            --accent:         #6366f1;
+            --accent-dim:     rgba(99,102,241,0.12);
+            --accent-glow:    rgba(99,102,241,0.22);
+            --accent-bright:  #818cf8;
+            --text:           #e2e8f0;
+            --text2:          #94a3b8;
+            --text3:          #4b5680;
+            --green:          #34d399;
+            --green-dim:      rgba(52,211,153,0.12);
+            --amber:          #fbbf24;
+            --amber-dim:      rgba(251,191,36,0.12);
+            --red:            #f87171;
+            --red-dim:        rgba(248,113,113,0.12);
+            --purple:         #a78bfa;
+            --mono:           'Consolas', 'Menlo', 'Monaco', 'Courier New', monospace;
+            --sans:           -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            --radius:         10px;
+            --radius-lg:      16px;
         }
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; }
-        body { display: flex; min-height: 100vh; background-color: var(--bg-light); color: var(--text-main); }
-        
-        #sync-banner { 
-            display: none; 
-            position: fixed; 
-            top: 0; 
-            width: 100%; 
-            background: #fff7ed; 
-            border-bottom: 1px solid #fed7aa; 
-            padding: 12px; 
-            text-align: center; 
-            font-size: 0.85rem; 
-            color: #9a3412; 
-            font-weight: 600; 
-            z-index: 1000; 
+
+        body {
+            font-family: var(--sans);
+            background-color: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            /* Dot-grid background — subtle technical texture */
+            background-image: radial-gradient(circle, rgba(99,110,230,0.07) 1px, transparent 1px);
+            background-size: 28px 28px;
         }
-        
-        .sidebar { 
-            flex: 0 0 300px; 
-            background-color: var(--bg-dark); 
-            color: white; 
-            padding: 40px; 
-            height: 100vh; 
-            position: sticky; 
-            top: 0; 
+
+        /* ── Sync banner ───────────────────────────────────────────────────── */
+        #sync-banner {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: var(--amber-dim);
+            border-bottom: 1px solid rgba(251,191,36,0.25);
+            padding: 10px 20px;
+            text-align: center;
+            font-size: 0.78rem;
+            color: var(--amber);
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
         }
-        .sidebar h1 { font-size: 2.2rem; margin-bottom: 10px; }
-        .version-tag { 
-            font-size: 0.7rem; 
-            color: #94a3b8; 
-            background: #1e293b; 
-            padding: 4px 10px; 
-            border-radius: 12px; 
-            margin-top: 5px; 
-            display: inline-block; 
-            border: 1px solid #334155; 
+
+        /* ── Sidebar ───────────────────────────────────────────────────────── */
+        .sidebar {
+            flex: 0 0 280px;
+            background-color: var(--bg2);
+            border-right: 1px solid var(--border);
+            padding: 36px 28px;
+            height: 100vh;
+            position: sticky;
+            top: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0;
         }
-        
-        .content-area { 
-            flex: 1; 
-            display: flex; 
-            justify-content: center; 
-            padding: 60px 20px; 
-            overflow-y: auto; 
+
+        .sidebar-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 6px;
         }
-        .card { 
-            width: 100%; 
-            max-width: 650px; 
-            background: white; 
-            padding: 30px; 
-            border-radius: 12px; 
-            border: 1px solid var(--border); 
-            box-shadow: 0 4px 12px rgba(0,0,0,0.05); 
+
+        .logo-icon {
+            width: 38px;
+            height: 38px;
+            background: var(--accent-dim);
+            border: 1px solid var(--border-hover);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
         }
-        
-        .tabs { 
-            display: flex; 
-            border-bottom: 1px solid var(--border); 
-            margin-bottom: 20px; 
-            gap: 15px; 
+
+        .logo-text {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            color: var(--text);
         }
-        .tab { 
-            padding: 8px 0; 
-            cursor: pointer; 
-            color: var(--text-muted); 
-            font-weight: 600; 
-            border-bottom: 2px solid transparent; 
-            transition: 0.2s; 
-            text-transform: capitalize; 
+
+        .version-tag {
+            font-family: var(--mono);
+            font-size: 0.68rem;
+            color: var(--text3);
+            background: var(--surface);
+            padding: 3px 8px;
+            border-radius: 5px;
+            border: 1px solid var(--border);
+            letter-spacing: 0.04em;
+            display: inline-block;
+            margin-top: 2px;
         }
-        .tab.active { 
-            color: var(--accent); 
-            border-bottom-color: var(--accent); 
+
+        .sidebar-divider {
+            height: 1px;
+            background: var(--border);
+            margin: 24px 0;
         }
-        
-        .input-group { 
-            margin-bottom: 15px; 
-            position: relative; 
+
+        #sidebar-meta { display: none; }
+
+        .meta-block {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
         }
-        label { 
-            display: block; 
-            font-size: 0.75rem; 
-            font-weight: 700; 
-            margin-bottom: 5px; 
-            text-transform: uppercase; 
-            color: var(--text-muted); 
+
+        .meta-label {
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text3);
+            margin-bottom: 4px;
         }
-        input, textarea { 
-            width: 100%; 
-            padding: 12px; 
-            border: 1px solid var(--border); 
-            border-radius: 6px; 
-            outline: none; 
-            font-size: 0.95rem; 
+
+        .status-dot {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--green);
+            margin-right: 6px;
+            box-shadow: 0 0 0 0 rgba(52,211,153,0.5);
+            animation: pulse-dot 2.4s ease-in-out infinite;
         }
-        
-        .toggle-btn { 
-            position: absolute; 
-            right: 10px; 
-            top: 30px; 
-            cursor: pointer; 
-            background: #f1f5f9; 
-            border: 1px solid var(--border); 
-            border-radius: 4px; 
-            padding: 2px 6px; 
-            font-size: 0.9rem; 
-            z-index: 5; 
+
+        @keyframes pulse-dot {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0.4); }
+            50%       { box-shadow: 0 0 0 5px rgba(52,211,153,0); }
         }
-        
-        .entry-item { 
-            padding: 15px; 
-            border: 1px solid var(--border); 
-            border-radius: 8px; 
-            margin-bottom: 10px; 
-            background: #fff; 
+
+        .status-text {
+            font-size: 0.8rem;
+            color: var(--green);
+            font-weight: 600;
         }
-        .secret-area { 
-            margin-top: 10px; 
-            padding: 12px; 
-            background: #f8fafc; 
-            border: 1px solid var(--border); 
-            border-radius: 6px; 
-            font-family: 'Monaco', monospace; 
-            font-size: 0.85rem; 
-            word-break: break-all; 
-            display: none; 
-            white-space: pre-wrap; 
-            border-left: 3px solid var(--accent); 
+
+        .meta-item {
+            font-size: 0.78rem;
+            color: var(--text2);
         }
-        .secret-area.active { display: block; }
-        
-        .btn { 
-            padding: 10px 20px; 
-            border: none; 
-            border-radius: 6px; 
-            cursor: pointer; 
-            font-weight: 600; 
-            color: white; 
-            transition: 0.2s; 
-            font-size: 0.9rem; 
+
+        .category-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+            margin-top: 4px;
         }
-        .btn-accent { background: var(--accent); }
-        .btn-purple { background: var(--purple); }
-        .btn-danger { background: var(--danger); }
-        
-        .upload-zone { 
-            border: 2px dashed var(--border); 
-            padding: 20px; 
-            text-align: center; 
-            border-radius: 8px; 
-            cursor: pointer; 
-            color: var(--text-muted); 
-            margin-bottom: 15px; 
-            font-size: 0.85rem; 
-            background: #fafafa; 
+
+        .category-pill {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            padding: 8px 4px;
+            text-align: center;
         }
-        .upload-zone:hover { 
-            border-color: var(--accent); 
-            background: #f0f7ff; 
+
+        .category-pill-count {
+            font-family: var(--mono);
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--accent-bright);
+            display: block;
+        }
+
+        .category-pill-name {
+            font-size: 0.65rem;
+            color: var(--text3);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .lock-timer-block {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px 14px;
+        }
+
+        .lock-timer-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .lock-timer-label {
+            font-size: 0.72rem;
+            color: var(--text3);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        #lock-countdown {
+            font-family: var(--mono);
+            font-size: 0.85rem;
+            color: var(--amber);
+            font-weight: 600;
+        }
+
+        .sidebar-footer {
+            margin-top: auto;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+        }
+
+        .security-notice {
+            font-size: 0.7rem;
+            color: var(--text3);
+            line-height: 1.5;
+        }
+
+        .security-notice strong {
+            color: var(--text2);
+        }
+
+        /* ── Main content ──────────────────────────────────────────────────── */
+        .content-area {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 60px 20px;
+            overflow-y: auto;
+        }
+
+        /* ── Card ──────────────────────────────────────────────────────────── */
+        .card {
+            width: 100%;
+            max-width: 640px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow: 0 0 0 1px rgba(99,110,230,0.05), 0 24px 60px rgba(0,0,0,0.4);
+        }
+
+        .card-header {
+            padding: 20px 28px 0;
+            background: linear-gradient(180deg, var(--surface2) 0%, var(--surface) 100%);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-header-title {
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text3);
+            margin-bottom: 16px;
+        }
+
+        .card-body {
+            padding: 24px 28px 28px;
+        }
+
+        /* ── Tabs ──────────────────────────────────────────────────────────── */
+        .tabs {
+            display: flex;
+            gap: 2px;
+        }
+
+        .tab {
+            padding: 8px 14px;
+            cursor: pointer;
+            color: var(--text3);
+            font-weight: 600;
+            font-size: 0.82rem;
+            letter-spacing: 0.02em;
+            border-bottom: 2px solid transparent;
+            transition: color 0.15s, border-color 0.15s;
+            border-radius: 4px 4px 0 0;
+            user-select: none;
+        }
+
+        .tab:hover { color: var(--text2); }
+
+        .tab.active {
+            color: var(--accent-bright);
+            border-bottom-color: var(--accent);
+        }
+
+        .tab.tab-danger { color: var(--text3); }
+        .tab.tab-danger:hover { color: var(--red); }
+        .tab.tab-danger.active { color: var(--red); border-bottom-color: var(--red); }
+
+        /* ── Form elements ─────────────────────────────────────────────────── */
+        .input-group {
+            margin-bottom: 14px;
+            position: relative;
+        }
+
+        label, .field-label {
+            display: block;
+            font-size: 0.68rem;
+            font-weight: 700;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text3);
+        }
+
+        input[type="text"],
+        input[type="password"],
+        textarea {
+            width: 100%;
+            padding: 11px 14px;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            font-family: var(--sans);
+            font-size: 0.9rem;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus,
+        textarea:focus {
+            border-color: var(--border-focus);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        input::placeholder, textarea::placeholder { color: var(--text3); }
+
+        .input-with-toggle {
+            position: relative;
+        }
+
+        .input-with-toggle input {
+            padding-right: 44px;
+        }
+
+        .toggle-btn {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 3px 7px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            color: var(--text2);
+            transition: background 0.15s;
+            z-index: 2;
+        }
+
+        .toggle-btn:hover { background: var(--surface3); }
+
+        textarea { resize: vertical; min-height: 110px; line-height: 1.5; }
+
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+        /* ── Buttons ───────────────────────────────────────────────────────── */
+        .btn {
+            padding: 10px 18px;
+            border: none;
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.85rem;
+            letter-spacing: 0.02em;
+            transition: opacity 0.15s, transform 0.1s, box-shadow 0.15s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        .btn:hover { opacity: 0.88; }
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+            box-shadow: 0 2px 12px rgba(99,102,241,0.3);
+            width: 100%;
+            padding: 12px;
+            font-size: 0.9rem;
+        }
+
+        .btn-primary:hover { box-shadow: 0 4px 20px rgba(99,102,241,0.45); }
+
+        .btn-purple {
+            background: rgba(167,139,250,0.15);
+            color: var(--purple);
+            border: 1px solid rgba(167,139,250,0.3);
+            width: 100%;
+            padding: 12px;
+            font-size: 0.9rem;
+        }
+
+        .btn-ghost {
+            background: var(--surface2);
+            color: var(--text2);
+            border: 1px solid var(--border);
+        }
+
+        .btn-danger-outline {
+            background: var(--red-dim);
+            color: var(--red);
+            border: 1px solid rgba(248,113,113,0.25);
+            width: 100%;
+            padding: 12px;
+            font-size: 0.9rem;
+        }
+
+        /* Entry action buttons */
+        .btn-view {
+            background: var(--accent-dim);
+            color: var(--accent-bright);
+            border: 1px solid rgba(99,102,241,0.2);
+            font-size: 0.75rem;
+            padding: 5px 11px;
+        }
+
+        .btn-view-active {
+            background: rgba(99,102,241,0.25);
+            border-color: rgba(99,102,241,0.4);
+        }
+
+        .btn-copy {
+            background: var(--surface2);
+            color: var(--text2);
+            border: 1px solid var(--border);
+            font-size: 0.75rem;
+            padding: 5px 11px;
+        }
+
+        .btn-copied {
+            color: var(--green) !important;
+            border-color: rgba(52,211,153,0.3) !important;
+            background: var(--green-dim) !important;
+        }
+
+        .btn-del {
+            background: transparent;
+            color: var(--text3);
+            border: 1px solid transparent;
+            font-size: 1rem;
+            padding: 5px 9px;
+            line-height: 1;
+        }
+
+        .btn-del:hover { color: var(--red); border-color: rgba(248,113,113,0.2); background: var(--red-dim); }
+
+        /* ── Upload zone ───────────────────────────────────────────────────── */
+        .upload-zone {
+            border: 1px dashed var(--border-hover);
+            padding: 18px;
+            text-align: center;
+            border-radius: var(--radius);
+            cursor: pointer;
+            color: var(--text3);
+            margin-bottom: 14px;
+            font-size: 0.82rem;
+            background: var(--bg2);
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        .upload-zone:hover {
+            border-color: var(--accent);
+            background: var(--accent-dim);
+            color: var(--accent-bright);
+        }
+
+        #file-label.staged { color: var(--green); }
+
+        /* ── Entry list ────────────────────────────────────────────────────── */
+        #list-container { margin-top: 18px; }
+
+        .entry-item {
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px 16px;
+            margin-bottom: 8px;
+            transition: border-color 0.15s;
+        }
+
+        .entry-item:hover { border-color: var(--border-hover); }
+
+        .entry-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .entry-name {
+            font-weight: 600;
+            font-size: 0.88rem;
+            color: var(--text);
+            display: block;
+        }
+
+        .entry-tag {
+            font-size: 0.7rem;
+            color: var(--text3);
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 1px 6px;
+            margin-top: 5px;
+            display: inline-block;
+            font-family: var(--mono);
+        }
+
+        .entry-actions {
+            display: flex;
+            gap: 5px;
+            flex-shrink: 0;
+        }
+
+        .secret-area {
+            display: none;
+            margin-top: 12px;
+            padding: 12px 14px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            border-radius: 0 var(--radius) var(--radius) 0;
+            font-family: var(--mono);
+            font-size: 0.82rem;
+            line-height: 1.6;
+            color: var(--text2);
+            word-break: break-all;
+            white-space: pre-wrap;
+        }
+
+        .secret-area.active { display: block; animation: fadeIn 0.15s ease; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+        .empty-state {
+            text-align: center;
+            color: var(--text3);
+            padding: 36px 0;
+            font-size: 0.83rem;
+        }
+
+        /* ── Search ────────────────────────────────────────────────────────── */
+        #v-search {
+            margin-bottom: 16px;
+        }
+
+        /* ── Card footer ───────────────────────────────────────────────────── */
+        .card-footer {
+            padding: 16px 28px;
+            border-top: 1px solid var(--border);
+            background: var(--bg2);
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        /* ── Section headings ──────────────────────────────────────────────── */
+        .section-title {
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text3);
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .danger-zone {
+            margin-top: 32px;
+            padding: 20px;
+            border: 1px solid rgba(248,113,113,0.18);
+            border-radius: var(--radius);
+            background: rgba(248,113,113,0.04);
+        }
+
+        .danger-zone-title {
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--red);
+            margin-bottom: 14px;
+            opacity: 0.7;
+        }
+
+        /* ── Importer ──────────────────────────────────────────────────────── */
+        #importer-ui { display: none; }
+
+        /* ── Scrollbar ─────────────────────────────────────────────────────── */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 3px; }
+
+        /* ── Responsive ────────────────────────────────────────────────────── */
+        @media (max-width: 720px) {
+            .sidebar { display: none; }
+            .content-area { padding: 20px 14px; }
+            .card-body { padding: 18px; }
+            .card-footer { padding: 14px 18px; }
         }
     </style>
 </head>
 <body>
 
-<div id="sync-banner">⚠️ Local changes detected. Download the latest backup.</div>
+<!-- Unsaved changes banner -->
+<div id="sync-banner">
+    <span>⚠</span>
+    <span>Local changes detected — download a backup to preserve them.</span>
+</div>
 
-<section class="sidebar">
-    <h1>Vault</h1>
-    <span id="app-version" class="version-tag">Loading version...</span>
-    <div id="sidebar-meta" style="display:none; margin-top:30px;">
-        <p id="last-update" style="font-size: 0.8rem; color: #94a3b8;"></p>
-        <p id="entry-count" style="margin-top: 5px; font-size: 0.8rem; color: #94a3b8; font-weight: 600;"></p>
+<!-- ── Sidebar ─────────────────────────────────────────────────────────────── -->
+<aside class="sidebar">
+    <div class="sidebar-logo">
+        <div class="logo-icon">🔐</div>
+        <span class="logo-text">Vault</span>
     </div>
-</section>
+    <span id="app-version" class="version-tag">loading…</span>
 
+    <div class="sidebar-divider"></div>
+
+    <div id="sidebar-meta">
+        <div class="meta-block">
+            <!-- Active session indicator -->
+            <div>
+                <div class="meta-label">Status</div>
+                <div>
+                    <span class="status-dot"></span>
+                    <span class="status-text">Session active</span>
+                </div>
+            </div>
+
+            <!-- Per-category counts -->
+            <div>
+                <div class="meta-label">Contents</div>
+                <div class="category-grid">
+                    <div class="category-pill">
+                        <span id="count-pw" class="category-pill-count">0</span>
+                        <span class="category-pill-name">Pass</span>
+                    </div>
+                    <div class="category-pill">
+                        <span id="count-keys" class="category-pill-count">0</span>
+                        <span class="category-pill-name">Keys</span>
+                    </div>
+                    <div class="category-pill">
+                        <span id="count-cert" class="category-pill-count">0</span>
+                        <span class="category-pill-name">Certs</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Auto-lock countdown -->
+            <div>
+                <div class="meta-label">Auto-lock</div>
+                <div class="lock-timer-block">
+                    <div class="lock-timer-row">
+                        <span class="lock-timer-label">Locks in</span>
+                        <span id="lock-countdown">5:00</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="last-update" class="meta-item"></div>
+            <div id="entry-count" class="meta-item" style="display:none"></div>
+        </div>
+    </div>
+
+    <div class="sidebar-footer">
+        <p class="security-notice">
+            <strong>AES-256-GCM</strong> encryption ·
+            <strong>Argon2id</strong> KDF ·
+            All data stored locally in IndexedDB.
+            Nothing leaves this browser.
+        </p>
+    </div>
+</aside>
+
+<!-- ── Main content ──────────────────────────────────────────────────────────── -->
 <main class="content-area">
+
+    <!-- Auth view ─────────────────────────────────────────────────────────── -->
     <div id="auth-view" class="card">
-        <div class="tabs">
-            <div id="tab-unlock" class="tab" data-mode="unlock" style="display:none">Unlock</div>
-            <div id="tab-new" class="tab active" data-mode="new">New Vault</div>
-            <div id="tab-restore" class="tab" data-mode="restore">Restore</div>
-        </div>
-
-        <div id="auth-unlock" style="display:none">
-            <div class="input-group"><label>Master Key</label><input type="password" id="unlock-key"><button class="toggle-btn" data-target="unlock-key">👁️</button></div>
-            <button id="unlock-btn" class="btn btn-accent" style="width:100%">Access Vault</button>
-        </div>
-
-        <div id="auth-new">
-            <div class="input-group"><label>Create Master Key (min. 10 chars)</label><input type="password" id="new-key"><button class="toggle-btn" data-target="new-key">👁️</button></div>
-            <div class="input-group"><label>Confirm Master Key</label><input type="password" id="new-confirm"><button class="toggle-btn" data-target="new-confirm">👁️</button></div>
-            <button id="create-btn" class="btn btn-accent" style="width:100%">Initialize Encrypted Storage</button>
-        </div>
-
-        <div id="auth-restore" style="display:none">
-            <div class="upload-zone" id="restore-zone">
-                <span id="file-label">Click to upload <b>vault_backup.json</b></span>
-                <input type="file" id="file-input" style="display:none" accept=".json">
+        <div class="card-header">
+            <div class="card-header-title">Access vault</div>
+            <div class="tabs">
+                <div id="tab-unlock" class="tab" data-mode="unlock" style="display:none">Unlock</div>
+                <div class="tab" data-mode="new">New vault</div>
+                <div class="tab" data-mode="restore">Restore</div>
             </div>
-            <div class="input-group"><label>Master Key for this Backup</label><input type="password" id="restore-key"><button class="toggle-btn" data-target="restore-key">👁️</button></div>
-            <button id="restore-btn" class="btn btn-purple" style="width:100%">Restore & Decrypt</button>
+        </div>
+
+        <div class="card-body">
+            <!-- Unlock -->
+            <div id="auth-unlock" style="display:none">
+                <div class="input-group">
+                    <label for="unlock-key">Master key</label>
+                    <div class="input-with-toggle">
+                        <input type="password" id="unlock-key" autocomplete="current-password"
+                               placeholder="Enter your master key">
+                        <button class="toggle-btn" data-target="unlock-key" aria-label="Toggle visibility">👁</button>
+                    </div>
+                </div>
+                <button id="unlock-btn" class="btn btn-primary">Unlock vault</button>
+            </div>
+
+            <!-- New vault -->
+            <div id="auth-new">
+                <div class="input-group">
+                    <label for="new-key">Create master key <span style="color:var(--text3); font-weight:400; text-transform:none; letter-spacing:0">(min. 10 chars)</span></label>
+                    <div class="input-with-toggle">
+                        <input type="password" id="new-key" autocomplete="new-password"
+                               placeholder="Choose a strong master key">
+                        <button class="toggle-btn" data-target="new-key" aria-label="Toggle visibility">👁</button>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label for="new-confirm">Confirm master key</label>
+                    <div class="input-with-toggle">
+                        <input type="password" id="new-confirm" autocomplete="new-password"
+                               placeholder="Re-enter master key">
+                        <button class="toggle-btn" data-target="new-confirm" aria-label="Toggle visibility">👁</button>
+                    </div>
+                </div>
+                <button id="create-btn" class="btn btn-primary">Initialize encrypted storage</button>
+            </div>
+
+            <!-- Restore -->
+            <div id="auth-restore" style="display:none">
+                <div class="upload-zone" id="restore-zone" role="button" aria-label="Upload backup file">
+                    <span id="file-label">Click to upload <strong>vault_backup.json</strong></span>
+                    <input type="file" id="file-input" style="display:none" accept=".json">
+                </div>
+                <div class="input-group">
+                    <label for="restore-key">Master key for this backup</label>
+                    <div class="input-with-toggle">
+                        <input type="password" id="restore-key" autocomplete="current-password"
+                               placeholder="Enter the backup's master key">
+                        <button class="toggle-btn" data-target="restore-key" aria-label="Toggle visibility">👁</button>
+                    </div>
+                </div>
+                <button id="restore-btn" class="btn btn-purple">Restore &amp; decrypt</button>
+            </div>
         </div>
     </div>
 
+    <!-- Vault view ─────────────────────────────────────────────────────────── -->
     <div id="vault-view" class="card" style="display:none">
-        <div class="tabs" id="main-tabs">
-            <div class="tab active" data-tab="passwords">Passwords</div>
-            <div class="tab" data-tab="keys">Keys</div>
-            <div class="tab" data-tab="certs">Certs</div>
-            <div class="tab" data-tab="security" style="color: var(--danger)">Security</div>
+        <div class="card-header">
+            <div class="card-header-title">Encrypted storage</div>
+            <div class="tabs" id="main-tabs">
+                <div class="tab active" data-tab="passwords">Passwords</div>
+                <div class="tab" data-tab="keys">Keys</div>
+                <div class="tab" data-tab="certs">Certs</div>
+                <div class="tab tab-danger" data-tab="security">Security</div>
+            </div>
         </div>
 
-        <div id="vault-content-section">
-            <input type="text" id="v-search" style="width:100%; padding:12px; border:1px solid var(--border); border-radius:8px; margin-bottom:15px" placeholder="Search entries...">
-            
-            <div id="importer-ui" style="display:none">
-                <div class="upload-zone" id="content-zone">
-                    <b>Drop or Click to Import File Content</b>
-                    <input type="file" id="content-uploader" style="display:none">
+        <div class="card-body">
+
+            <!-- Passwords / Keys / Certs content -->
+            <div id="vault-content-section">
+                <input type="text" id="v-search" placeholder="Search by title or tag…">
+
+                <!-- File importer (keys + certs only) -->
+                <div id="importer-ui">
+                    <div class="upload-zone" id="content-zone" role="button" aria-label="Import file">
+                        <strong>Drop or click to import file content</strong>
+                        <input type="file" id="content-uploader" style="display:none">
+                    </div>
+                </div>
+
+                <!-- Add entry form -->
+                <div class="two-col" style="margin-bottom:10px">
+                    <input type="text" id="n-name" placeholder="Title / alias">
+                    <input type="text" id="n-tag"  placeholder="Tag (optional)">
+                </div>
+                <textarea id="n-content" placeholder="Paste secret content here…" style="margin-bottom:10px"></textarea>
+                <button id="add-btn" class="btn btn-primary">Encrypt &amp; save entry</button>
+
+                <div id="list-container"></div>
+            </div>
+
+            <!-- Security section -->
+            <div id="security-section" style="display:none">
+                <div class="section-title">Change master key</div>
+                <div class="input-group">
+                    <label for="change-pass-new">New master key <span style="color:var(--text3); font-weight:400; text-transform:none; letter-spacing:0">(min. 10 chars)</span></label>
+                    <div class="input-with-toggle">
+                        <input type="password" id="change-pass-new" autocomplete="new-password">
+                        <button class="toggle-btn" data-target="change-pass-new" aria-label="Toggle visibility">👁</button>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label for="change-pass-confirm">Confirm new key</label>
+                    <div class="input-with-toggle">
+                        <input type="password" id="change-pass-confirm" autocomplete="new-password">
+                        <button class="toggle-btn" data-target="change-pass-confirm" aria-label="Toggle visibility">👁</button>
+                    </div>
+                </div>
+                <button id="change-pass-btn" class="btn btn-primary">Update &amp; re-encrypt</button>
+
+                <div class="danger-zone">
+                    <div class="danger-zone-title">⚠ Danger zone</div>
+                    <button id="wipe-btn" class="btn btn-danger-outline">Wipe all browser data</button>
                 </div>
             </div>
-
-            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px">
-                <input type="text" id="n-name" placeholder="Title / Alias">
-                <input type="text" id="n-tag" placeholder="Tag">
-            </div>
-            <textarea id="n-content" style="height:120px; margin-bottom:10px" placeholder="Paste secret content here..."></textarea>
-            <button id="add-btn" class="btn btn-accent" style="width:100%">Encrypt & Save Entry</button>
-            
-            <div id="list-container" style="margin-top:20px"></div>
         </div>
 
-        <div id="security-section" style="display:none">
-            <h3>Master Security Settings</h3>
-            <div class="input-group"><label>New Master Key (min. 10 chars)</label><input type="password" id="change-pass-new"><button class="toggle-btn" data-target="change-pass-new">👁️</button></div>
-            <div class="input-group"><label>Confirm New Key</label><input type="password" id="change-pass-confirm"><button class="toggle-btn" data-target="change-pass-confirm">👁️</button></div>
-            <button id="change-pass-btn" class="btn btn-danger" style="width:100%">Update & Re-encrypt</button>
-            <button id="wipe-btn" class="btn btn-danger" style="width:100%; margin-top:30px; opacity:0.6">Wipe All Browser Data</button>
-        </div>
-
-        <div style="margin-top:30px; border-top:1px solid var(--border); padding-top:20px; display:flex; gap:10px">
-            <button id="export-btn" class="btn" style="flex:1; background:#f1f5f9; color:#475569">Download Backup (.json)</button>
-            <button id="lock-btn" class="btn btn-danger">Lock Session</button>
+        <div class="card-footer">
+            <button id="export-btn" class="btn btn-ghost" style="flex:1">↓ Download backup</button>
+            <button id="lock-btn"   class="btn btn-danger-outline" style="width:auto; padding: 10px 18px;">Lock session</button>
         </div>
     </div>
+
 </main>
-
-<script nonce="vault-internal-2026">
-let VAULT_VERSION = "0.0.0";
-const DB_NAME = "VaultDB";
-const DB_VERSION = 1;
-const STORE_NAME = "vault";
-const BLOB_KEY = "main";
-
-let vaultData = { passwords: [], keys: [], certs: [] };
-let currentKey = null;
-let activeTab = 'passwords';
-let stagedBlob = null;
-let db = null;
-
-
-async function loadVersion() {
-    try {
-        const response = await fetch('config.json');
-        const config = await response.json();
-        VAULT_VERSION = config.version;
-        document.getElementById('app-version').innerText = `Engine v${VAULT_VERSION} (IndexedDB)`;
-    } catch (err) {
-        console.error("Failed to load version config:", err);
-        document.getElementById('app-version').innerText = "Engine v0.0.0 (Offline)";
-    }
-}
-
-// UPDATED: Password sanitizer for cross-platform consistency (trims + NFC normalization)
-function sanitizePassword(pass) {
-    return pass.trim().normalize("NFC");
-}
-
-// IndexedDB Helpers
-async function openDB() {
-    if (db) return db;
-    return new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, DB_VERSION);
-        req.onerror = () => reject(req.error);
-        req.onsuccess = () => {
-            db = req.result;
-            resolve(db);
-        };
-        req.onupgradeneeded = e => {
-            const upgradeDb = e.target.result;
-            if (!upgradeDb.objectStoreNames.contains(STORE_NAME)) {
-                upgradeDb.createObjectStore(STORE_NAME);
-            }
-        };
-    });
-}
-
-async function getBlob() {
-    const database = await openDB();
-    return new Promise((resolve, reject) => {
-        const tx = database.transaction(STORE_NAME, "readonly");
-        const store = tx.objectStore(STORE_NAME);
-        const req = store.get(BLOB_KEY);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-    });
-}
-
-async function setBlob(value) {
-    const database = await openDB();
-    return new Promise((resolve, reject) => {
-        const tx = database.transaction(STORE_NAME, "readwrite");
-        const store = tx.objectStore(STORE_NAME);
-        store.put(value, BLOB_KEY);
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-    });
-}
-
-async function clearDB() {
-    return new Promise((resolve, reject) => {
-        const req = indexedDB.deleteDatabase(DB_NAME);
-        req.onsuccess = resolve;
-        req.onerror = reject;
-        req.onblocked = () => alert("Delete blocked - close other tabs.");
-    });
-}
-
-// Crypto
-async function deriveKey(pass, salt) {
-    const sanitized = sanitizePassword(pass);
-    const hash = await hashwasm.argon2id({
-        password: sanitized,
-        salt: salt,
-        iterations: 5,
-        parallelism: 1,
-        memorySize: 194560,
-        hashLength: 32,
-        outputType: 'binary'
-    });
-    return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
-}
-
-async function decryptBlob(blob, pass) {
-    try {
-        if (!blob?.h) throw new Error("No integrity check – possibly old vault");
-        const s = Uint8Array.from(atob(blob.s), c => c.charCodeAt(0));
-        const i = Uint8Array.from(atob(blob.i), c => c.charCodeAt(0));
-        const ct = Uint8Array.from(atob(blob.ct), c => c.charCodeAt(0));
-        const h = Uint8Array.from(atob(blob.h), c => c.charCodeAt(0));
-
-        const sanitized = sanitizePassword(pass);
-        const hmacKeyRaw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sanitized + "hmac"));
-        const hmacKey = await crypto.subtle.importKey("raw", hmacKeyRaw, { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
-        const toVerify = new Uint8Array([...s, ...i, ...ct]);
-        const valid = await crypto.subtle.verify("HMAC", hmacKey, h, toVerify);
-        if (!valid) throw new Error("Integrity check failed");
-
-        const key = await deriveKey(pass, s);
-        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: i }, key, ct);
-        return JSON.parse(new TextDecoder().decode(dec));
-    } catch (e) {
-        console.error(e);
-        return null;
-    }
-}
-
-async function autoSave() {
-    if (!currentKey) return;
-    try {
-        const s = crypto.getRandomValues(new Uint8Array(16));
-        const i = crypto.getRandomValues(new Uint8Array(12));
-        const key = await deriveKey(currentKey, s);
-
-        const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: i }, key, new TextEncoder().encode(JSON.stringify(vaultData)));
-
-        const sanitized = sanitizePassword(currentKey);
-        const hmacKeyRaw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sanitized + "hmac"));
-        const hmacKey = await crypto.subtle.importKey("raw", hmacKeyRaw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-        const toSign = new Uint8Array([...s, ...i, ...new Uint8Array(enc)]);
-        const hmac = await crypto.subtle.sign("HMAC", hmacKey, toSign);
-
-        const blob = {
-            ct: btoa(String.fromCharCode(...new Uint8Array(enc))),
-            s: btoa(String.fromCharCode(...s)),
-            i: btoa(String.fromCharCode(...i)),
-            h: btoa(String.fromCharCode(...new Uint8Array(hmac)))
-        };
-
-        await setBlob(blob);
-        document.getElementById('sync-banner').style.display = 'block';
-        updateMeta();
-    } catch (err) {
-        console.error("Save failed:", err);
-        alert("Failed to save: " + (err.name === 'QuotaExceededError' ? "Storage full" : err.message));
-    }
-}
-
-// UI Helpers
-function escapeHTML(str) {
-    const p = document.createElement('p');
-    p.textContent = str;
-    return p.innerHTML;
-}
-
-function updateMeta() {
-    document.getElementById('sidebar-meta').style.display = 'block';
-    document.getElementById('last-update').innerText = "Last sync: " + new Date().toLocaleTimeString();
-    const total = (vaultData.passwords?.length || 0) + (vaultData.keys?.length || 0) + (vaultData.certs?.length || 0);
-    document.getElementById('entry-count').innerText = total + " encrypted objects";
-}
-
-function renderList() {
-    const container = document.getElementById('list-container');
-    container.innerHTML = '';
-    const query = document.getElementById('v-search').value.toLowerCase();
-
-    const list = vaultData[activeTab] || [];
-    list.filter(e => e.name.toLowerCase().includes(query)).forEach(e => {
-        const div = document.createElement('div');
-        div.className = 'entry-item';
-        div.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <div>
-                    <b>${escapeHTML(e.name)}</b>
-                    ${e.tag ? `<br><small style="color:var(--text-muted)">${escapeHTML(e.tag)}</small>` : ''}
-                </div>
-                <div>
-                    <button class="btn btn-accent btn-sm act-v" data-id="${e.id}" style="padding:4px 10px; font-size:0.75rem;">View</button>
-                    <button class="btn btn-purple btn-sm act-c" data-id="${e.id}" style="padding:4px 10px; font-size:0.75rem;">Copy</button>
-                    <button class="btn btn-danger btn-sm act-d" data-id="${e.id}" style="padding:4px 10px; font-size:0.75rem;">×</button>
-                </div>
-            </div>
-            <div id="sec-${e.id}" class="secret-area"></div>
-        `;
-        container.appendChild(div);
-    });
-
-    document.querySelectorAll('.act-v').forEach(b => b.onclick = () => {
-        const el = document.getElementById(`sec-${b.dataset.id}`);
-        if (el.classList.contains('active')) {
-            el.textContent = '';
-            el.classList.remove('active');
-        } else {
-            el.textContent = vaultData[activeTab].find(x => x.id == b.dataset.id).content;
-            el.classList.add('active');
-        }
-    });
-
-    document.querySelectorAll('.act-c').forEach(b => b.onclick = async () => {
-        const secret = vaultData[activeTab].find(x => x.id == b.dataset.id).content;
-        await navigator.clipboard.writeText(secret);
-        const old = b.innerText;
-        b.innerText = "Copied!";
-        setTimeout(() => b.innerText = old, 1500);
-    });
-
-    document.querySelectorAll('.act-d').forEach(b => b.onclick = async () => {
-        if (!confirm("Delete this entry?")) return;
-        vaultData[activeTab] = vaultData[activeTab].filter(x => x.id != b.dataset.id);
-        await autoSave();
-        renderList();
-    });
-}
-
-// Event listeners
-document.addEventListener('DOMContentLoaded', async () => {
-
-    await loadVersion();
-
-    try {
-        await openDB();
-    } catch (e) {
-        alert("IndexedDB not available. Vault cannot function properly.");
-        return;
-    }
-
-    const existing = await getBlob();
-    if (existing) {
-        document.getElementById('tab-unlock').style.display = 'block';
-        document.getElementById('auth-unlock').style.display = 'block';
-        document.getElementById('auth-new').style.display = 'none';
-        document.querySelector('.tab[data-mode="unlock"]').classList.add('active');
-        document.querySelector('.tab[data-mode="new"]').classList.remove('active');
-    }
-
-    document.querySelectorAll('.toggle-btn').forEach(btn => {
-        btn.onclick = e => {
-            e.preventDefault();
-            const input = document.getElementById(btn.dataset.target);
-            input.type = input.type === 'password' ? 'text' : 'password';
-            btn.innerText = input.type === 'password' ? '👁️' : '🔒';
-        };
-    });
-
-    document.querySelectorAll('.tab[data-mode]').forEach(el => el.onclick = () => {
-        ['unlock','new','restore'].forEach(m => document.getElementById('auth-' + m).style.display = 'none');
-        document.getElementById('auth-' + el.dataset.mode).style.display = 'block';
-        document.querySelectorAll('.tab[data-mode]').forEach(t => t.classList.remove('active'));
-        el.classList.add('active');
-    });
-
-    document.querySelectorAll('.tab[data-tab]').forEach(el => el.onclick = () => {
-        activeTab = el.dataset.tab;
-        document.querySelectorAll('.tab[data-tab]').forEach(t => t.classList.remove('active'));
-        el.classList.add('active');
-        const isSecurity = activeTab === 'security';
-        document.getElementById('vault-content-section').style.display = isSecurity ? 'none' : 'block';
-        document.getElementById('security-section').style.display = isSecurity ? 'block' : 'none';
-        document.getElementById('importer-ui').style.display = (activeTab === 'keys' || activeTab === 'certs') ? 'block' : 'none';
-        if (!isSecurity) renderList();
-    });
-
-    document.getElementById('unlock-btn').onclick = async () => {
-        const raw = document.getElementById('unlock-key').value;
-        const p = sanitizePassword(raw);
-        const blob = await getBlob();
-        const data = await decryptBlob(blob, p);
-        if (data) {
-            currentKey = p;
-            vaultData = data;
-            document.getElementById('auth-view').style.display = 'none';
-            document.getElementById('vault-view').style.display = 'block';
-            renderList();
-            updateMeta();
-        } else {
-            alert("Invalid key or corrupted vault.");
-        }
-    };
-
-    document.getElementById('create-btn').onclick = async () => {
-        const raw1 = document.getElementById('new-key').value;
-        const raw2 = document.getElementById('new-confirm').value;
-        const p1 = sanitizePassword(raw1);
-        const p2 = sanitizePassword(raw2);
-        if (p1 !== p2 || p1.length < 10) {
-            alert("Keys must match and be at least 10 characters.");
-            return;
-        }
-        currentKey = p1;
-        await autoSave();
-        document.getElementById('auth-view').style.display = 'none';
-        document.getElementById('vault-view').style.display = 'block';
-        renderList();
-        updateMeta();
-    };
-
-    document.getElementById('add-btn').onclick = async () => {
-        const name = document.getElementById('n-name').value.trim();
-        const content = document.getElementById('n-content').value.trim();
-        if (!name || !content) return alert("Title and content required.");
-        vaultData[activeTab].push({
-            id: Date.now() + Math.random(),
-            name,
-            content,
-            tag: document.getElementById('n-tag').value.trim()
-        });
-        document.getElementById('n-name').value = '';
-        document.getElementById('n-content').value = '';
-        document.getElementById('n-tag').value = '';
-        await autoSave();
-        renderList();
-    };
-
-    document.getElementById('export-btn').onclick = async () => {
-        const blob = await getBlob();
-        if (!blob) return;
-
-        // The package now uses the dynamic VAULT_VERSION from config.json
-        const pkg = { 
-            version: VAULT_VERSION, 
-            ts: new Date().toISOString(), 
-            payload: blob 
-        };
-
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([JSON.stringify(pkg, null, 2)], {type: 'application/json'}));
-        
-        // Dynamically sets the filename, e.g., vault_backup_v1.1.5.json
-        a.download = `vault_backup_v${VAULT_VERSION}.json`; 
-        
-        a.click();
-        
-        // Clear the "unsaved changes" banner once downloaded
-        document.getElementById('sync-banner').style.display = 'none';
-    };
-    document.getElementById('restore-zone').onclick = () => document.getElementById('file-input').click();
-    document.getElementById('file-input').onchange = e => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const r = new FileReader();
-        r.onload = ev => {
-            try {
-                const imp = JSON.parse(ev.target.result);
-                stagedBlob = imp.payload || imp;
-                document.getElementById('file-label').innerHTML = `✅ Staged (${imp.version || 'unknown'})`;
-            } catch {
-                alert("Invalid JSON file.");
-            }
-        };
-        r.readAsText(file);
-    };
-
-    document.getElementById('restore-btn').onclick = async () => {
-        const raw = document.getElementById('restore-key').value;
-        const p = sanitizePassword(raw);
-        const data = await decryptBlob(stagedBlob, p);
-        if (data) {
-            currentKey = p;
-            vaultData = data;
-            await autoSave();
-            document.getElementById('auth-view').style.display = 'none';
-            document.getElementById('vault-view').style.display = 'block';
-            renderList();
-            updateMeta();
-        } else {
-            alert("Restoration failed.");
-        }
-    };
-
-    document.getElementById('content-zone').onclick = () => document.getElementById('content-uploader').click();
-    document.getElementById('content-uploader').onchange = e => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const r = new FileReader();
-        r.onload = ev => {
-            document.getElementById('n-content').value = ev.target.result;
-            if (!document.getElementById('n-name').value) document.getElementById('n-name').value = file.name;
-        };
-        r.readAsText(file);
-    };
-
-    document.getElementById('change-pass-btn').onclick = async () => {
-        const rawN1 = document.getElementById('change-pass-new').value;
-        const rawN2 = document.getElementById('change-pass-confirm').value;
-        const n1 = sanitizePassword(rawN1);
-        const n2 = sanitizePassword(rawN2);
-        if (n1 !== n2 || n1.length < 10) {
-            alert("Keys must match and be at least 10 characters.");
-            return;
-        }
-        if (!confirm("Re-encrypt entire vault?")) return;
-
-        try {
-            const currentBlob = await getBlob();
-            const oldData = await decryptBlob(currentBlob, currentKey);
-            if (!oldData) throw new Error("Current vault unreadable");
-            currentKey = n1;
-            vaultData = oldData;
-            await autoSave();
-            alert("Key updated & vault re-encrypted.");
-            document.getElementById('change-pass-new').value = '';
-            document.getElementById('change-pass-confirm').value = '';
-        } catch (e) {
-            alert("Change failed: " + e.message);
-        }
-    };
-
-    document.getElementById('lock-btn').onclick = () => window.location.reload();
-    document.getElementById('wipe-btn').onclick = async () => {
-        if (confirm("Delete ALL data permanently?")) {
-            await clearDB();
-            window.location.reload();
-        }
-    };
-
-    document.getElementById('v-search').oninput = renderList;
-});
-</script>
 </body>
 </html>
