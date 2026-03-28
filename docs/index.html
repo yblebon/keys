@@ -7,7 +7,7 @@
 
     <!--
     ═══════════════════════════════════════════════════════════════
-    SECURITY POLICY — v1.1.0
+    SECURITY POLICY — v1.3.0
 
     FIX (Critical): The original code used a STATIC nonce
     ('nonce-vault-internal-2026') hardcoded in both the CSP header
@@ -31,14 +31,18 @@
         img-src     'self' data:;
         connect-src 'self';
         font-src    'self';
+        worker-src  'self';
         form-action 'none';
         base-uri    'self';
     ">
-
-    <!-- hash-wasm Argon2id — SRI enforced -->
-    <script src="https://cdn.jsdelivr.net/npm/hash-wasm@4.11.0/dist/argon2.umd.min.js"
-            integrity="sha256-o5Q2B3wQN6xf0+9YVQJt4W3ukKO/TyKRuYLgWlHNGwc="
-            crossorigin="anonymous"></script>
+    <!--
+    NOTE: cdn.jsdelivr.net and wasm-unsafe-eval are in script-src solely for
+    backward compatibility — the Argon2 library is lazy-loaded from CDN only
+    when decrypting a vault/backup that was originally encrypted with Argon2id.
+    New vaults and all re-encrypted data use native PBKDF2 with no external deps.
+    Once all your backups have been migrated you can remove cdn.jsdelivr.net
+    and wasm-unsafe-eval from script-src and serve the vault entirely offline.
+    -->
 
     <!-- All application logic — loaded from same origin ('self') -->
     <script src="vault.js" defer></script>
@@ -82,7 +86,6 @@
             color: var(--text);
             min-height: 100vh;
             display: flex;
-            /* Dot-grid background — subtle technical texture */
             background-image: radial-gradient(circle, rgba(99,110,230,0.07) 1px, transparent 1px);
             background-size: 28px 28px;
         }
@@ -211,9 +214,10 @@
             color: var(--text2);
         }
 
+        /* 2×2 grid now that we have 4 categories */
         .category-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-columns: 1fr 1fr;
             gap: 8px;
             margin-top: 4px;
         }
@@ -479,7 +483,6 @@
             font-size: 0.9rem;
         }
 
-        /* Entry action buttons */
         .btn-view {
             background: var(--accent-dim);
             color: var(--accent-bright);
@@ -614,9 +617,7 @@
         }
 
         /* ── Search ────────────────────────────────────────────────────────── */
-        #v-search {
-            margin-bottom: 16px;
-        }
+        #v-search { margin-bottom: 16px; }
 
         /* ── Card footer ───────────────────────────────────────────────────── */
         .card-footer {
@@ -661,6 +662,150 @@
         /* ── Importer ──────────────────────────────────────────────────────── */
         #importer-ui { display: none; }
 
+        /* ── Environment tab ───────────────────────────────────────────────── */
+        .env-top-bar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 14px;
+            align-items: center;
+        }
+
+        .new-env-panel {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 16px;
+            animation: fadeIn 0.15s ease;
+        }
+
+        .new-env-panel .input-group { margin-bottom: 12px; }
+
+        .env-item {
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 8px;
+            overflow: hidden;
+            transition: border-color 0.15s;
+        }
+
+        .env-item:hover { border-color: var(--border-hover); }
+
+        .env-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .env-header-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        .env-name {
+            font-weight: 600;
+            font-size: 0.88rem;
+            color: var(--text);
+            flex-shrink: 0;
+        }
+
+        .env-badge {
+            font-family: var(--mono);
+            font-size: 0.68rem;
+            color: var(--accent-bright);
+            background: var(--accent-dim);
+            border: 1px solid rgba(99,102,241,0.2);
+            border-radius: 5px;
+            padding: 2px 7px;
+            flex-shrink: 0;
+        }
+
+        .env-preview {
+            font-family: var(--mono);
+            font-size: 0.72rem;
+            color: var(--text3);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .env-body {
+            border-top: 1px solid var(--border);
+            padding: 14px 16px;
+        }
+
+        .env-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 14px;
+            font-size: 0.82rem;
+        }
+
+        .env-table th {
+            text-align: left;
+            font-size: 0.65rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text3);
+            padding: 0 8px 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .env-table td {
+            padding: 7px 8px;
+            border-bottom: 1px solid rgba(99,110,230,0.06);
+            vertical-align: middle;
+        }
+
+        .env-table tr:last-child td { border-bottom: none; }
+
+        .env-table td:first-child {
+            font-family: var(--mono);
+            color: var(--text);
+            font-size: 0.8rem;
+            width: 36%;
+            word-break: break-all;
+        }
+
+        .env-table td:nth-child(2) { color: var(--text2); font-size: 0.8rem; }
+
+        .env-table td:last-child {
+            text-align: right;
+            white-space: nowrap;
+            width: 1%;
+        }
+
+        .env-val-masked { letter-spacing: 0.06em; color: var(--text3); }
+        .env-val-plain  { font-family: var(--mono); word-break: break-all; font-size: 0.8rem; }
+
+        .env-add-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .env-add-key {
+            flex: 0 0 148px !important;
+            font-family: var(--mono) !important;
+            font-size: 0.82rem !important;
+            text-transform: uppercase;
+        }
+
+        .env-empty {
+            text-align: center;
+            color: var(--text3);
+            font-size: 0.8rem;
+            padding: 20px 0;
+        }
+
         /* ── Scrollbar ─────────────────────────────────────────────────────── */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -704,7 +849,7 @@
                 </div>
             </div>
 
-            <!-- Per-category counts -->
+            <!-- Per-category counts — 2×2 grid -->
             <div>
                 <div class="meta-label">Contents</div>
                 <div class="category-grid">
@@ -719,6 +864,10 @@
                     <div class="category-pill">
                         <span id="count-cert" class="category-pill-count">0</span>
                         <span class="category-pill-name">Certs</span>
+                    </div>
+                    <div class="category-pill">
+                        <span id="count-env" class="category-pill-count">0</span>
+                        <span class="category-pill-name">Envs</span>
                     </div>
                 </div>
             </div>
@@ -825,6 +974,7 @@
                 <div class="tab active" data-tab="passwords">Passwords</div>
                 <div class="tab" data-tab="keys">Keys</div>
                 <div class="tab" data-tab="certs">Certs</div>
+                <div class="tab" data-tab="envs">Envs</div>
                 <div class="tab tab-danger" data-tab="security">Security</div>
             </div>
         </div>
@@ -852,6 +1002,43 @@
                 <button id="add-btn" class="btn btn-primary">Encrypt &amp; save entry</button>
 
                 <div id="list-container"></div>
+            </div>
+
+            <!-- Environments section -->
+            <div id="envs-section" style="display:none">
+                <!-- Top bar -->
+                <div class="env-top-bar">
+                    <input type="text" id="env-search" placeholder="Search environments…" style="flex:1;margin:0">
+                    <button id="new-env-btn" class="btn btn-primary"
+                        style="width:auto;padding:10px 18px;white-space:nowrap">+ New env</button>
+                </div>
+
+                <!-- New env panel (hidden by default) -->
+                <div id="new-env-panel" class="new-env-panel" style="display:none">
+                    <div class="input-group">
+                        <label for="new-env-name">Environment name</label>
+                        <input type="text" id="new-env-name"
+                               placeholder="e.g. production, staging, local"
+                               autocomplete="off">
+                    </div>
+                    <div class="upload-zone" id="new-env-import-zone"
+                         role="button" aria-label="Import .env file"
+                         style="margin-bottom:12px">
+                        <span id="new-env-file-label">Click or drop a .env file to pre-populate (optional)</span>
+                        <input type="file" id="new-env-file-input"
+                               style="display:none" accept=".env,text/plain">
+                    </div>
+                    <div style="display:flex;gap:8px">
+                        <button id="create-env-btn" class="btn btn-primary" style="flex:1">
+                            Create environment
+                        </button>
+                        <button id="cancel-env-btn" class="btn btn-ghost"
+                            style="width:auto;padding:10px 18px">Cancel</button>
+                    </div>
+                </div>
+
+                <!-- Env list -->
+                <div id="env-list-container"></div>
             </div>
 
             <!-- Security section -->

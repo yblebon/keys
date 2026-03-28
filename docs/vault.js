@@ -1,808 +1,887 @@
 'use strict';
+/* Vault — vault.js v1.3.0
+   AES-256-GCM + PBKDF2-SHA256 (new) / Argon2id (legacy compat)
+   Backward compatible: old Argon2id backups are auto-migrated to
+   PBKDF2 on restore/unlock. KDF is stored in meta + backup JSON. */
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// FIX: Version baked in at build time — eliminates the config.json network
-//      fetch that was unnecessary attack surface on every page load.
-// ─────────────────────────────────────────────────────────────────────────────
-const VAULT_VERSION = "1.1.0";
-const DB_NAME       = "VaultDB";
-const DB_VERSION    = 1;
-const STORE_NAME    = "vault";
-const BLOB_KEY      = "main";
-const LOCK_TIMEOUT  = 5 * 60 * 1000;   // 5 min idle → auto-lock
-const CLIP_TTL      = 30 * 1000;       // 30 s → clear clipboard
+const VERSION     = 'v1.3.1';
+const DB_NAME     = 'vault_db';
+const STORE       = 'entries';
+const LOCK_MS     = 5 * 60 * 1000;
+const KDF_PBKDF2  = 'pbkdf2';
+const KDF_ARGON2  = 'argon2id';
+// CDN URL for Argon2 — only injected when an old backup/vault needs it
+const ARGON2_CDN  = 'https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Module-scoped session state
-// FIX: Raw password is NEVER retained after unlock. Only non-exportable
-//      CryptoKey objects (aesKey, hmacKey) and the vault salt are kept.
-//      sessionKeys is module-scoped, not window-scoped, limiting exposure.
-// ─────────────────────────────────────────────────────────────────────────────
-let sessionKeys  = null;   // { aesKey: CryptoKey, hmacKey: CryptoKey, salt: Uint8Array }
-let vaultData    = { passwords: [], keys: [], certs: [] };
-let activeTab    = 'passwords';
-let stagedBlob   = null;
-let db           = null;
-let lockTimer    = null;
-let lockInterval = null;
-let lockRemaining = LOCK_TIMEOUT;
+/* ── State ─────────────────────────────────────────── */
+let CK            = null;
+let SALT          = null;
+let DB            = null;
+let lockTimer     = null;
+let lockEnd       = 0;
+let curTab        = 'passwords';
+let pendingBackup = null;
+let newEnvVars    = null;
+const envCache    = new Map();
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Password sanitization
-// FIX: Removed .trim() — whitespace is valid and significant in passwords.
-//      Silent trimming could make a password irrecoverable on another device.
-//      NFC normalization is kept for cross-platform Unicode consistency.
-//      The UI warns the user explicitly if edge whitespace is detected.
-// ─────────────────────────────────────────────────────────────────────────────
-function sanitizePassword(raw) {
-    return raw.normalize('NFC');
+/* ── Codec helpers ─────────────────────────────────── */
+const te    = new TextEncoder();
+const td    = new TextDecoder();
+const b64e  = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const b64d  = s   => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const rnd   = n   => { const b = new Uint8Array(n); crypto.getRandomValues(b); return b; };
+
+/* ── DOM helpers ───────────────────────────────────── */
+const $   = id => document.getElementById(id);
+const esc = s  => String(s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+function toast(msg, type = 'ok') {
+  const col = { ok: 'var(--green)', err: 'var(--red)', info: 'var(--accent-bright)' }[type];
+  const el  = document.createElement('div');
+  el.textContent = msg;
+  el.style.cssText = `position:fixed;top:16px;right:16px;z-index:9999;padding:10px 16px;
+    background:var(--surface2);border:1px solid var(--border);border-radius:8px;
+    font-size:.82rem;color:${col};box-shadow:0 4px 24px rgba(0,0,0,.35);
+    animation:fadeIn .15s ease;pointer-events:none;`;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2800);
 }
 
-function hasEdgeWhitespace(raw) {
-    return raw !== raw.trim();
+/* ── KDF — PBKDF2-SHA256 (current, no deps) ────────── */
+async function deriveKeyPbkdf2(pass, saltBytes) {
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', te.encode(pass), 'PBKDF2', false, ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: saltBytes, iterations: 600_000, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ID generation
-// FIX: Replaced Date.now() + Math.random() with crypto.getRandomValues().
-//      Math.random() is not cryptographically secure.
-// ─────────────────────────────────────────────────────────────────────────────
-function generateId() {
-    const buf = new Uint8Array(16);
-    crypto.getRandomValues(buf);
-    return Array.from(buf, b => b.toString(16).padStart(2, '0')).join('');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// IndexedDB helpers
-// ─────────────────────────────────────────────────────────────────────────────
-async function openDB() {
-    if (db) return db;
-    return new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, DB_VERSION);
-        req.onerror = () => reject(req.error);
-        req.onsuccess = () => { db = req.result; resolve(db); };
-        req.onupgradeneeded = e => {
-            const d = e.target.result;
-            if (!d.objectStoreNames.contains(STORE_NAME))
-                d.createObjectStore(STORE_NAME);
-        };
-    });
-}
-
-async function getBlob() {
-    const database = await openDB();
-    return new Promise((resolve, reject) => {
-        const tx = database.transaction(STORE_NAME, 'readonly');
-        const req = tx.objectStore(STORE_NAME).get(BLOB_KEY);
-        req.onsuccess = () => resolve(req.result ?? null);
-        req.onerror   = () => reject(req.error);
-    });
-}
-
-async function setBlob(value) {
-    const database = await openDB();
-    return new Promise((resolve, reject) => {
-        const tx = database.transaction(STORE_NAME, 'readwrite');
-        tx.objectStore(STORE_NAME).put(value, BLOB_KEY);
-        tx.oncomplete = () => resolve();
-        tx.onerror    = () => reject(tx.error);
-    });
-}
-
-async function clearDB() {
-    if (db) { db.close(); db = null; }
-    return new Promise((resolve, reject) => {
-        const req = indexedDB.deleteDatabase(DB_NAME);
-        req.onsuccess = resolve;
-        req.onerror   = reject;
-        req.onblocked = () => alert('Delete blocked — close other tabs first.');
-    });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Key derivation
-//
-// FIX (critical): The original code derived the HMAC key from a cheap
-//   SHA-256(password + "hmac"), which was verified BEFORE Argon2id ran.
-//   This allowed an attacker to brute-force passwords by checking the HMAC
-//   in nanoseconds, completely bypassing the expensive KDF.
-//
-// Fix: Argon2id now outputs 64 bytes. The first 32 bytes become the AES-GCM
-//   key; the last 32 bytes become the HMAC-SHA256 key. Both are imported as
-//   non-exportable CryptoKey objects (extractable: false). An attacker must
-//   pay the full Argon2id cost (≈190 MB RAM, 5 iterations) to verify any
-//   single password guess.
-// ─────────────────────────────────────────────────────────────────────────────
-async function deriveKeys(pass, salt) {
-    const sanitized = sanitizePassword(pass);
-    const hash = await hashwasm.argon2id({
-        password:    sanitized,
-        salt,
-        iterations:  5,
-        parallelism: 1,
-        memorySize:  194560,
-        hashLength:  64,           // 32 bytes → AES  |  32 bytes → HMAC
-        outputType:  'binary'
-    });
-
-    const aesKey = await crypto.subtle.importKey(
-        'raw', hash.slice(0, 32),
-        { name: 'AES-GCM' },
-        false,                     // non-exportable
-        ['encrypt', 'decrypt']
-    );
-    const hmacKey = await crypto.subtle.importKey(
-        'raw', hash.slice(32, 64),
-        { name: 'HMAC', hash: 'SHA-256' },
-        false,                     // non-exportable
-        ['sign', 'verify']
-    );
-    return { aesKey, hmacKey };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Encrypt vault → blob
-// The salt is stored in the blob and is fixed for the lifetime of a given
-// master key. A new IV is generated on every save (forward secrecy for
-// individual snapshots). The HMAC authenticates (salt ‖ iv ‖ ciphertext).
-// ─────────────────────────────────────────────────────────────────────────────
-async function encryptVault(keys, salt) {
-    const iv  = crypto.getRandomValues(new Uint8Array(12));
-    const ct  = new Uint8Array(await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv }, keys.aesKey,
-        new TextEncoder().encode(JSON.stringify(vaultData))
+/* ── KDF — Argon2id (legacy compat, lazy CDN load) ── */
+let argon2LoadPromise = null;
+function loadArgon2() {
+  if (window.argon2) return Promise.resolve();
+  if (argon2LoadPromise) return argon2LoadPromise;
+  argon2LoadPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = ARGON2_CDN;
+    s.crossOrigin = 'anonymous';
+    s.onload  = () => window.argon2 ? resolve() : reject(new Error('argon2 not exposed after load'));
+    s.onerror = () => reject(new Error(
+      'Could not load Argon2 library from CDN. ' +
+      'Check your internet connection, or serve argon2-bundled.min.js locally as a fallback.'
     ));
-
-    // Authenticate-then-encrypt: sign (salt ‖ iv ‖ ct)
-    const toSign = new Uint8Array(salt.length + iv.length + ct.length);
-    toSign.set(salt, 0);
-    toSign.set(iv,   salt.length);
-    toSign.set(ct,   salt.length + iv.length);
-    const hmac = new Uint8Array(await crypto.subtle.sign('HMAC', keys.hmacKey, toSign));
-
-    const b64 = buf => btoa(String.fromCharCode(...buf));
-    return { s: b64(salt), iv: b64(iv), ct: b64(ct), h: b64(hmac), v: 2 };
+    document.head.appendChild(s);
+  });
+  return argon2LoadPromise;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Legacy (v1) decryption path
-//
-// Old blobs have no `v` field and used a fundamentally different key scheme:
-//   • Argon2id with hashLength: 32  → AES-GCM key only
-//   • HMAC key = SHA-256(password + "hmac")  ← the KDF-bypass vulnerability
-//   • IV stored under field name "i"
-//
-// We support decrypting them so users don't lose their data, then immediately
-// re-save in the secure v2 format. The legacy path is ONLY used when the blob
-// lacks `v: 2`; it is never used for new saves.
-// ─────────────────────────────────────────────────────────────────────────────
-async function decryptBlobLegacy(blob, pass) {
-    const from64   = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-    const salt     = from64(blob.s);
-    const iv       = from64(blob.i);
-    const ct       = from64(blob.ct);
-    const h        = from64(blob.h);
-    const sanitized = sanitizePassword(pass);
-
-    // Legacy HMAC key — derived from a cheap SHA-256, NOT Argon2id
-    const hmacRaw  = await crypto.subtle.digest('SHA-256',
-        new TextEncoder().encode(sanitized + 'hmac'));
-    const hmacKey  = await crypto.subtle.importKey(
-        'raw', hmacRaw, { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
-
-    const toVerify = new Uint8Array(salt.length + iv.length + ct.length);
-    toVerify.set(salt, 0);
-    toVerify.set(iv,   salt.length);
-    toVerify.set(ct,   salt.length + iv.length);
-
-    const valid = await crypto.subtle.verify('HMAC', hmacKey, h, toVerify);
-    if (!valid) return null;
-
-    // Legacy AES key — Argon2id with 32-byte output only
-    const hash32   = await hashwasm.argon2id({
-        password:    sanitized,
-        salt,
-        iterations:  5,
-        parallelism: 1,
-        memorySize:  194560,
-        hashLength:  32,
-        outputType:  'binary'
-    });
-    const aesKey = await crypto.subtle.importKey(
-        'raw', hash32, { name: 'AES-GCM' }, false, ['decrypt']);
-
-    const dec  = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ct);
-    return JSON.parse(new TextDecoder().decode(dec));
+async function deriveKeyArgon2(pass, saltBytes) {
+  await loadArgon2();
+  // argon2-browser API — parameter names differ from other argon2 libs:
+  //   pass (not password), time (not iterations), mem (not memorySize),
+  //   hashLen (not hashLength), type enum (not outputType: 'binary').
+  // Wrong names cause silent fallback to library defaults → wrong key → wrong backup decryption.
+  const result = await window.argon2.hash({
+    pass       : pass,
+    salt       : saltBytes,
+    parallelism: 1,
+    time       : 3,
+    mem        : 65536,
+    hashLen    : 32,
+    type       : window.argon2.ArgonType.Argon2id,
+  });
+  // result.hash is a Uint8Array of the derived key bytes
+  return crypto.subtle.importKey(
+    'raw', result.hash, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
+  );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Decrypt blob → { data, keys, salt }
-// Returns null on any failure (wrong key, tampered data).
-//
-// Format detection:
-//   blob.v === 2  →  new secure format (Argon2id 64-byte split keys)
-//   no blob.v     →  legacy v1 format  (Argon2id 32-byte + SHA-256 HMAC)
-//
-// After a successful legacy decrypt the caller re-saves in v2 format
-// automatically, so the migration is transparent to the user.
-// ─────────────────────────────────────────────────────────────────────────────
-async function decryptBlob(blob, pass) {
-    try {
-        if (!blob?.h) throw new Error('Missing integrity field');
-
-        const from64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-
-        // ── v2 path (secure) ────────────────────────────────────────────────
-        if (blob.v === 2) {
-            const salt = from64(blob.s);
-            const iv   = from64(blob.iv);
-            const ct   = from64(blob.ct);
-            const h    = from64(blob.h);
-
-            const keys = await deriveKeys(pass, salt);
-
-            const toVerify = new Uint8Array(salt.length + iv.length + ct.length);
-            toVerify.set(salt, 0);
-            toVerify.set(iv,   salt.length);
-            toVerify.set(ct,   salt.length + iv.length);
-
-            const valid = await crypto.subtle.verify('HMAC', keys.hmacKey, h, toVerify);
-            if (!valid) throw new Error('Integrity check failed — wrong key or tampered data');
-
-            const dec  = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, keys.aesKey, ct);
-            const data = JSON.parse(new TextDecoder().decode(dec));
-            return { data, keys, salt, migrated: false };
-        }
-
-        // ── v1 legacy path ──────────────────────────────────────────────────
-        // Blob has no `v` field — created by the original vault before v1.1.0.
-        // Decrypt with the old scheme, then signal the caller to migrate.
-        const data = await decryptBlobLegacy(blob, pass);
-        if (!data) throw new Error('Legacy integrity check failed — wrong key or corrupted data');
-
-        // Derive fresh v2 keys using a new salt so the re-save is fully secure
-        const newSalt = crypto.getRandomValues(new Uint8Array(16));
-        const newKeys = await deriveKeys(pass, newSalt);
-        return { data, keys: newKeys, salt: newSalt, migrated: true };
-
-    } catch (e) {
-        console.error('Decryption error:', e.message);
-        return null;
-    }
+/* ── KDF dispatcher ─────────────────────────────────── */
+async function deriveKey(pass, saltBytes, kdf = KDF_PBKDF2) {
+  return kdf === KDF_ARGON2
+    ? deriveKeyArgon2(pass, saltBytes)
+    : deriveKeyPbkdf2(pass, saltBytes);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Auto-save
-// Uses cached session CryptoKeys — the raw password is never needed again
-// after unlock. A new IV is generated on each save.
-// ─────────────────────────────────────────────────────────────────────────────
-async function autoSave() {
-    if (!sessionKeys) return;
-    try {
-        const blob = await encryptVault(sessionKeys, sessionKeys.salt);
-        await setBlob(blob);
-        setBannerVisible(true);
-        updateMeta();
-    } catch (err) {
-        const msg = err.name === 'QuotaExceededError' ? 'Storage full' : err.message;
-        console.error('Save failed:', err);
-        alert('Save failed: ' + msg);
-    }
+/* ── Re-encrypt all entries under a new key ─────────── */
+async function reEncryptAll(entries, oldKey, newKey) {
+  return Promise.all(entries.map(async e => {
+    const pt = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: b64d(e.encrypted.iv) }, oldKey, b64d(e.encrypted.ct)
+    );
+    const iv = rnd(12);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, newKey, pt);
+    return { ...e, encrypted: { iv: b64e(iv), ct: b64e(ct) } };
+  }));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Session lock
-// FIX: Auto-lock after LOCK_TIMEOUT ms of inactivity. On lock, all sensitive
-//      data (CryptoKeys + plaintext vault) is cleared from memory before reload.
-// ─────────────────────────────────────────────────────────────────────────────
+/* ── Background migration: Argon2 → PBKDF2 ──────────── */
+// Called after a successful Argon2 unlock with CK already set.
+async function migrateToArgon2(pass) {
+  try {
+    const entries = await dbGetAll();
+    const ns  = rnd(16);
+    const nk  = await deriveKeyPbkdf2(pass, ns);
+    const re  = await reEncryptAll(entries, CK, nk);
+    await dbClear();
+    for (const e of re) { const { id, ...rest } = e; await dbAdd(rest); }
+    CK = nk; SALT = ns;
+    await metaPut('salt', b64e(ns));
+    await metaPut('kdf',  KDF_PBKDF2);
+    envCache.clear();
+    markUnsaved();
+    toast('Vault migrated from Argon2id → PBKDF2', 'info');
+  } catch (err) {
+    console.warn('KDF migration failed (non-fatal):', err);
+  }
+}
+
+/* ── Crypto ─────────────────────────────────────────── */
+async function aesEncrypt(plain) {
+  const iv = rnd(12);
+  const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, CK, te.encode(plain));
+  return { iv: b64e(iv), ct: b64e(ct) };
+}
+
+async function aesDecrypt({ iv, ct }) {
+  const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv: b64d(iv) }, CK, b64d(ct));
+  return td.decode(pt);
+}
+
+/* ── IndexedDB ──────────────────────────────────────── */
+function openDB() {
+  return new Promise((ok, fail) => {
+    const r = indexedDB.open(DB_NAME, 1);
+    r.onupgradeneeded = e => {
+      const d = e.target.result;
+      if (!d.objectStoreNames.contains(STORE))
+        d.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
+      if (!d.objectStoreNames.contains('meta'))
+        d.createObjectStore('meta');
+    };
+    r.onsuccess = e => ok(e.target.result);
+    r.onerror   = e => fail(e.target.error);
+  });
+}
+
+const wrap  = r     => new Promise((ok, fail) => { r.onsuccess = () => ok(r.result); r.onerror = () => fail(r.error); });
+const txS   = rw    => DB.transaction(STORE, rw ? 'readwrite' : 'readonly').objectStore(STORE);
+const txM   = rw    => DB.transaction('meta',  rw ? 'readwrite' : 'readonly').objectStore('meta');
+
+const dbGetAll = ()     => wrap(txS().getAll());
+const dbAdd    = obj    => wrap(txS(true).add(obj));
+const dbPut    = obj    => wrap(txS(true).put(obj));
+const dbDel    = id     => wrap(txS(true).delete(id));
+const dbClear  = ()     => wrap(txS(true).clear());
+const metaGet  = k      => wrap(txM().get(k));
+const metaPut  = (k, v) => wrap(txM(true).put(v, k));
+const metaClr  = ()     => wrap(txM(true).clear());
+
+/* ── Entry helpers ──────────────────────────────────── */
+async function addEntry(name, content, tag, type) {
+  const encrypted = await aesEncrypt(content);
+  return dbAdd({ name, tag: tag || '', type, encrypted, created: Date.now() });
+}
+
+/* ── .env parsing / formatting ──────────────────────── */
+function parseDotEnv(text) {
+  const vars = {};
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq < 1) continue;
+    const key = line.slice(0, eq).trim();
+    let   val = line.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'")))
+      val = val.slice(1, -1);
+    if (key) vars[key] = val;
+  }
+  return vars;
+}
+
+function formatDotEnv(vars) {
+  return Object.entries(vars).map(([k, v]) =>
+    /[\s#"'\\]/.test(v) || v === ''
+      ? `${k}="${v.replace(/\\/g,'\\\\').replace(/"/g,'\\"')}"`
+      : `${k}=${v}`
+  ).join('\n') + '\n';
+}
+
+/* ── Env cache ──────────────────────────────────────── */
+async function getEnvVars(envId) {
+  if (envCache.has(envId)) return envCache.get(envId);
+  const all   = await dbGetAll();
+  const entry = all.find(e => e.id === envId);
+  if (!entry) return {};
+  const vars = JSON.parse(await aesDecrypt(entry.encrypted));
+  envCache.set(envId, vars);
+  return vars;
+}
+
+async function saveEnvVars(envId, vars) {
+  const all   = await dbGetAll();
+  const entry = all.find(e => e.id === envId);
+  if (!entry) return;
+  entry.encrypted = await aesEncrypt(JSON.stringify(vars));
+  entry.updated   = Date.now();
+  envCache.set(envId, vars);
+  await dbPut(entry);
+}
+
+/* ── Auto-lock ──────────────────────────────────────── */
+const resetLock = () => { lockEnd = Date.now() + LOCK_MS; };
+const stopLock  = () => clearInterval(lockTimer);
+
+function startLock() {
+  stopLock();
+  lockEnd   = Date.now() + LOCK_MS;
+  lockTimer = setInterval(() => {
+    const rem = Math.max(0, lockEnd - Date.now());
+    if (rem === 0) { lockVault(); return; }
+    const m = Math.floor(rem / 60000);
+    const s = Math.floor((rem % 60000) / 1000);
+    $('lock-countdown').textContent = `${m}:${String(s).padStart(2, '0')}`;
+  }, 1000);
+}
+
+/* ── Lock / unlock ──────────────────────────────────── */
 function lockVault() {
-    clearTimeout(lockTimer);
-    clearInterval(lockInterval);
-    sessionKeys = null;
-    vaultData   = { passwords: [], keys: [], certs: [] };
-    window.location.reload();
+  CK = null; SALT = null;
+  envCache.clear();
+  stopLock();
+  $('vault-view').style.display    = 'none';
+  $('auth-view').style.display     = '';
+  $('sidebar-meta').style.display  = 'none';
+  $('sync-banner').style.display   = 'none';
+  setAuthMode('unlock');
 }
 
-function resetLockTimer() {
-    if (!sessionKeys) return;
-    clearTimeout(lockTimer);
-    lockTimer     = setTimeout(lockVault, LOCK_TIMEOUT);
-    lockRemaining = LOCK_TIMEOUT;
+function unlockUI() {
+  $('auth-view').style.display    = 'none';
+  $('vault-view').style.display   = '';
+  $('sidebar-meta').style.display = '';
+  $('tab-unlock').style.display   = '';
+  $('unlock-key').value = '';
+  startLock();
+  switchTab('passwords');
 }
 
-function startLockCountdown() {
-    lockRemaining = LOCK_TIMEOUT;
-    clearInterval(lockInterval);
-    lockInterval = setInterval(() => {
-        lockRemaining = Math.max(0, lockRemaining - 1000);
-        renderLockCountdown();
-    }, 1000);
+/* ── Auth mode ──────────────────────────────────────── */
+function setAuthMode(mode) {
+  ['unlock','new','restore'].forEach(m =>
+    $(`auth-${m}`).style.display = m === mode ? '' : 'none'
+  );
+  document.querySelectorAll('#auth-view .tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.mode === mode)
+  );
 }
 
-function renderLockCountdown() {
-    const el = document.getElementById('lock-countdown');
-    if (!el) return;
-    const m = Math.floor(lockRemaining / 60000);
-    const s = Math.floor((lockRemaining % 60000) / 1000);
-    el.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+/* ── Sidebar counts ─────────────────────────────────── */
+async function updateCounts(all) {
+  if (!all) all = await dbGetAll();
+  $('count-pw').textContent   = all.filter(e => e.type === 'pw').length;
+  $('count-keys').textContent = all.filter(e => e.type === 'key').length;
+  $('count-cert').textContent = all.filter(e => e.type === 'cert').length;
+  $('count-env').textContent  = all.filter(e => e.type === 'env').length;
 }
 
-['mousemove', 'keydown', 'click', 'touchstart', 'scroll'].forEach(evt =>
-    document.addEventListener(evt, resetLockTimer, { passive: true })
-);
+/* ── Tab switching ──────────────────────────────────── */
+function switchTab(tab) {
+  curTab = tab;
+  document.querySelectorAll('#main-tabs .tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.tab === tab)
+  );
+  $('vault-content-section').style.display = ['passwords','keys','certs'].includes(tab) ? '' : 'none';
+  $('security-section').style.display      = tab === 'security' ? '' : 'none';
+  $('envs-section').style.display          = tab === 'envs'     ? '' : 'none';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// UI helpers
-// ─────────────────────────────────────────────────────────────────────────────
-function setBannerVisible(show) {
-    const el = document.getElementById('sync-banner');
-    if (el) el.style.display = show ? 'flex' : 'none';
+  if (['passwords','keys','certs'].includes(tab)) {
+    $('importer-ui').style.display = tab !== 'passwords' ? '' : 'none';
+    renderEntryList();
+  } else if (tab === 'envs') {
+    renderEnvList();
+  }
+  resetLock();
 }
 
-function updateMeta() {
-    document.getElementById('sidebar-meta').style.display = 'block';
-    document.getElementById('last-update').textContent =
-        'Synced ' + new Date().toLocaleTimeString();
-    const total = (vaultData.passwords?.length ?? 0)
-                + (vaultData.keys?.length ?? 0)
-                + (vaultData.certs?.length ?? 0);
-    document.getElementById('entry-count').textContent =
-        `${total} encrypted object${total !== 1 ? 's' : ''}`;
-
-    const pw  = vaultData.passwords?.length ?? 0;
-    const ky  = vaultData.keys?.length ?? 0;
-    const cr  = vaultData.certs?.length ?? 0;
-    setCount('count-pw',   pw);
-    setCount('count-keys', ky);
-    setCount('count-cert', cr);
+/* ── Entry list ─────────────────────────────────────── */
+async function renderEntryList() {
+  const q    = $('v-search').value.toLowerCase();
+  const type = { passwords:'pw', keys:'key', certs:'cert' }[curTab];
+  const all  = await dbGetAll();
+  const rows = all.filter(e => e.type === type &&
+    (!q || e.name.toLowerCase().includes(q) || (e.tag || '').toLowerCase().includes(q))
+  );
+  updateCounts(all);
+  const c = $('list-container');
+  if (!rows.length) {
+    c.innerHTML = `<div class="empty-state">No ${curTab} stored yet.</div>`;
+    return;
+  }
+  c.innerHTML = rows.map(e => `
+    <div class="entry-item">
+      <div class="entry-row">
+        <div>
+          <span class="entry-name">${esc(e.name)}</span>
+          ${e.tag ? `<span class="entry-tag">${esc(e.tag)}</span>` : ''}
+        </div>
+        <div class="entry-actions">
+          <button class="btn btn-view"  data-action="view"   data-id="${e.id}">View</button>
+          <button class="btn btn-copy"  data-action="copy"   data-id="${e.id}">Copy</button>
+          <button class="btn btn-del"   data-action="delete" data-id="${e.id}" title="Delete">×</button>
+        </div>
+      </div>
+      <div class="secret-area" id="sec-${e.id}"></div>
+    </div>`).join('');
 }
 
-function setCount(id, n) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = n;
-}
+/* ── Entry actions (delegated) ──────────────────────── */
+async function handleEntryAction(e) {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  resetLock();
+  const id     = parseInt(btn.dataset.id);
+  const action = btn.dataset.action;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// renderList
-// FIX: Replaced innerHTML + template literals with explicit DOM construction.
-//      The original approach was brittle — any new field added without
-//      escaping would introduce an XSS vector. textContent is safe by design.
-// ─────────────────────────────────────────────────────────────────────────────
-function renderList() {
-    const container = document.getElementById('list-container');
-    if (!container) return;
-    container.textContent = '';   // safe clear, no innerHTML
-
-    const query = document.getElementById('v-search')?.value.toLowerCase() ?? '';
-    const list  = (vaultData[activeTab] ?? []).filter(e =>
-        e.name.toLowerCase().includes(query) ||
-        (e.tag ?? '').toLowerCase().includes(query)
-    );
-
-    if (list.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'empty-state';
-        empty.textContent = query ? 'No matching entries.' : 'No entries yet.';
-        container.appendChild(empty);
-        return;
-    }
-
-    list.forEach(e => {
-        const item = document.createElement('div');
-        item.className = 'entry-item';
-
-        // Header row
-        const row = document.createElement('div');
-        row.className = 'entry-row';
-
-        const meta = document.createElement('div');
-        const name = document.createElement('span');
-        name.className = 'entry-name';
-        name.textContent = e.name;          // textContent — safe
-        meta.appendChild(name);
-
-        if (e.tag) {
-            const tag = document.createElement('span');
-            tag.className = 'entry-tag';
-            tag.textContent = e.tag;        // textContent — safe
-            meta.appendChild(tag);
-        }
-
-        // Action buttons
-        const actions = document.createElement('div');
-        actions.className = 'entry-actions';
-
-        const btnView = mkBtn('View',  'btn-view');
-        const btnCopy = mkBtn('Copy',  'btn-copy');
-        const btnDel  = mkBtn('×',     'btn-del');
-
-        // Secret area
-        const secretArea = document.createElement('div');
-        secretArea.className = 'secret-area';
-
-        btnView.addEventListener('click', () => {
-            const open = secretArea.classList.contains('active');
-            // textContent — safe: user's own stored content, displayed only to them
-            secretArea.textContent = open ? '' : e.content;
-            secretArea.classList.toggle('active', !open);
-            btnView.textContent = open ? 'View' : 'Hide';
-            btnView.classList.toggle('btn-view-active', !open);
-        });
-
-        btnCopy.addEventListener('click', async () => {
-            try {
-                await navigator.clipboard.writeText(e.content);
-                // FIX: Clear clipboard after CLIP_TTL (30 s) to prevent
-                //      secrets persisting in clipboard history indefinitely.
-                setTimeout(async () => {
-                    try { await navigator.clipboard.writeText(''); } catch { /* ignore */ }
-                }, CLIP_TTL);
-                const prev = btnCopy.textContent;
-                btnCopy.textContent = '✓ Copied';
-                btnCopy.classList.add('btn-copied');
-                setTimeout(() => {
-                    btnCopy.textContent = prev;
-                    btnCopy.classList.remove('btn-copied');
-                }, 1500);
-            } catch {
-                alert('Clipboard access denied by browser.');
-            }
-        });
-
-        btnDel.addEventListener('click', async () => {
-            if (!confirm(`Delete "${e.name}"? This cannot be undone.`)) return;
-            // FIX: Strict === comparison (was ==, which coerces types)
-            vaultData[activeTab] = vaultData[activeTab].filter(x => x.id !== e.id);
-            await autoSave();
-            renderList();
-            updateMeta();
-        });
-
-        actions.append(btnView, btnCopy, btnDel);
-        row.append(meta, actions);
-        item.append(row, secretArea);
-        container.appendChild(item);
-    });
-}
-
-function mkBtn(label, cls) {
-    const b = document.createElement('button');
-    b.className = `btn ${cls}`;
-    b.textContent = label;
-    return b;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Auth tab helpers
-// ─────────────────────────────────────────────────────────────────────────────
-function switchAuthTab(mode) {
-    ['unlock', 'new', 'restore'].forEach(m =>
-        document.getElementById('auth-' + m).style.display = 'none'
-    );
-    document.getElementById('auth-' + mode).style.display = 'block';
-    document.querySelectorAll('.tab[data-mode]').forEach(t =>
-        t.classList.toggle('active', t.dataset.mode === mode)
-    );
-}
-
-function showVault() {
-    document.getElementById('auth-view').style.display  = 'none';
-    document.getElementById('vault-view').style.display = 'block';
-    resetLockTimer();
-    startLockCountdown();
-    renderList();
-    updateMeta();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Main
-// ─────────────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', async () => {
-
-    // FIX: Version is set from the baked-in constant — no config.json fetch.
-    document.getElementById('app-version').textContent = `v${VAULT_VERSION}`;
-
-    // DB availability check
-    try {
-        await openDB();
-    } catch {
-        alert('IndexedDB unavailable — vault cannot function in this browser.');
-        return;
-    }
-
-    // Determine initial view: existing vault → unlock, new install → create
-    const existing = await getBlob();
-    if (existing) {
-        document.getElementById('tab-unlock').style.display = 'block';
-        switchAuthTab('unlock');
+  if (action === 'view') {
+    const area = $(`sec-${id}`);
+    const open = area.classList.contains('active');
+    if (!open) {
+      const all   = await dbGetAll();
+      const entry = all.find(e => e.id === id);
+      area.textContent = await aesDecrypt(entry.encrypted);
+      btn.classList.add('btn-view-active');
     } else {
-        switchAuthTab('new');
+      area.textContent = '';
+      btn.classList.remove('btn-view-active');
     }
+    area.classList.toggle('active');
+  }
 
-    // Password visibility toggles
-    document.querySelectorAll('.toggle-btn').forEach(btn =>
-        btn.addEventListener('click', e => {
-            e.preventDefault();
-            const input = document.getElementById(btn.dataset.target);
-            const show  = input.type === 'password';
-            input.type       = show ? 'text' : 'password';
-            btn.textContent  = show ? '🔒' : '👁';
-        })
-    );
+  if (action === 'copy') {
+    const all   = await dbGetAll();
+    const entry = all.find(e => e.id === id);
+    await navigator.clipboard.writeText(await aesDecrypt(entry.encrypted));
+    btn.textContent = '✓ Copied';
+    btn.classList.add('btn-copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('btn-copied'); }, 1500);
+  }
 
-    // Auth tabs
-    document.querySelectorAll('.tab[data-mode]').forEach(el =>
-        el.addEventListener('click', () => switchAuthTab(el.dataset.mode))
-    );
+  if (action === 'delete') {
+    if (!confirm('Delete this entry?')) return;
+    await dbDel(id);
+    markUnsaved();
+    renderEntryList();
+  }
+}
 
-    // Vault section tabs
-    document.querySelectorAll('.tab[data-tab]').forEach(el =>
-        el.addEventListener('click', () => {
-            activeTab = el.dataset.tab;
-            document.querySelectorAll('.tab[data-tab]').forEach(t =>
-                t.classList.toggle('active', t === el)
-            );
-            const isSec = activeTab === 'security';
-            document.getElementById('vault-content-section').style.display =
-                isSec ? 'none' : 'block';
-            document.getElementById('security-section').style.display =
-                isSec ? 'block' : 'none';
-            document.getElementById('importer-ui').style.display =
-                !isSec && (activeTab === 'keys' || activeTab === 'certs') ? 'block' : 'none';
-            if (!isSec) renderList();
-        })
-    );
+/* ── Env list ───────────────────────────────────────── */
+async function renderEnvList() {
+  const q    = ($('env-search')?.value || '').toLowerCase();
+  const all  = await dbGetAll();
+  const envs = all.filter(e => e.type === 'env' && (!q || e.name.toLowerCase().includes(q)));
+  updateCounts(all);
 
-    // ── Unlock ────────────────────────────────────────────────────────────────
-    const unlockBtn = document.getElementById('unlock-btn');
-    unlockBtn.addEventListener('click', async () => {
-        const raw = document.getElementById('unlock-key').value;
-        if (!raw) return;
+  const c = $('env-list-container');
+  if (!c) return;
+  if (!envs.length) {
+    c.innerHTML = `<div class="empty-state">No environments yet — create one or import a .env file.</div>`;
+    return;
+  }
 
-        if (hasEdgeWhitespace(raw)) {
-            // FIX: Explicit warning instead of silent trim
-            const proceed = confirm(
-                'Your password starts or ends with a space.\n\n' +
-                'These spaces have been preserved exactly as typed. ' +
-                'If this is unintentional, cancel and retype without edge spaces.'
-            );
-            if (!proceed) return;
-        }
+  c.innerHTML = `<div class="empty-state" style="padding:8px 0;font-size:.8rem">Decrypting…</div>`;
 
-        unlockBtn.textContent = 'Decrypting…';
-        unlockBtn.disabled = true;
+  const resolved = await Promise.all(envs.map(async e => {
+    let vars = {};
+    try { vars = JSON.parse(await aesDecrypt(e.encrypted)); envCache.set(e.id, vars); } catch {}
+    return { e, vars };
+  }));
 
-        const blob   = await getBlob();
-        const result = await decryptBlob(blob, raw);
+  c.innerHTML = resolved.map(({ e, vars }) => {
+    const keys    = Object.keys(vars);
+    const count   = keys.length;
+    const preview = keys.slice(0, 3).join(', ') + (keys.length > 3 ? '…' : '');
+    return `
+    <div class="env-item" data-id="${e.id}">
+      <div class="env-header">
+        <div class="env-header-left">
+          <span class="env-name">${esc(e.name)}</span>
+          <span class="env-badge">${count} var${count !== 1 ? 's' : ''}</span>
+          ${preview ? `<span class="env-preview">${esc(preview)}</span>` : ''}
+        </div>
+        <div class="entry-actions">
+          <button class="btn btn-ghost" data-action="env-import" data-id="${e.id}"
+            style="font-size:.75rem;padding:5px 11px">↑ Import</button>
+          <input type="file" accept=".env,text/plain"
+            class="env-file-input" data-id="${e.id}" style="display:none">
+          <button class="btn btn-copy" data-action="env-export" data-id="${e.id}"
+            style="font-size:.75rem;padding:5px 11px">↓ Export</button>
+          <button class="btn btn-view" data-action="env-toggle" data-id="${e.id}"
+            style="font-size:.75rem;padding:5px 11px">▼</button>
+          <button class="btn btn-del"  data-action="env-delete" data-id="${e.id}"
+            title="Delete environment">×</button>
+        </div>
+      </div>
+      <div class="env-body" id="env-body-${e.id}" style="display:none">
+        ${renderVarTable(e.id, vars)}
+        <div class="env-add-row">
+          <input type="text"     id="ekey-${e.id}" class="env-add-key"
+            placeholder="VARIABLE_NAME" autocomplete="off" spellcheck="false">
+          <div class="input-with-toggle" style="flex:1;position:relative">
+            <input type="password" id="eval-${e.id}" class="env-add-val"
+              placeholder="value" autocomplete="off">
+            <button class="toggle-btn" data-target="eval-${e.id}" aria-label="Toggle">👁</button>
+          </div>
+          <button class="btn btn-primary" data-action="var-add" data-id="${e.id}"
+            style="padding:9px 14px;white-space:nowrap;width:auto">+ Add</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
 
-        unlockBtn.textContent = 'Unlock Vault';
-        unlockBtn.disabled = false;
+  c.querySelectorAll('.env-file-input').forEach(inp =>
+    inp.addEventListener('change', handleEnvFileInput)
+  );
+}
 
-        if (result) {
-            // FIX: Raw password discarded here. Only non-exportable CryptoKeys
-            //      are retained in sessionKeys for the duration of the session.
-            sessionKeys = { aesKey: result.keys.aesKey, hmacKey: result.keys.hmacKey, salt: result.salt };
-            vaultData   = result.data;
-            document.getElementById('unlock-key').value = '';   // zero input
+function renderVarTable(envId, vars) {
+  const entries = Object.entries(vars);
+  if (!entries.length)
+    return `<div class="env-empty">No variables yet — add one below or import a .env file.</div>`;
+  return `<table class="env-table">
+    <thead><tr><th>Key</th><th>Value</th><th></th></tr></thead>
+    <tbody>${entries.map(([k, v]) => `
+      <tr>
+        <td>${esc(k)}</td>
+        <td>
+          <span class="env-val-masked">••••••••</span>
+          <span class="env-val-plain" style="display:none">${esc(v)}</span>
+        </td>
+        <td>
+          <button class="btn btn-view" data-action="var-toggle"
+            style="font-size:.72rem;padding:3px 8px">View</button>
+          <button class="btn btn-copy" data-action="var-copy"
+            data-env-id="${envId}" data-key="${esc(k)}"
+            style="font-size:.72rem;padding:3px 8px">Copy</button>
+          <button class="btn btn-del" data-action="var-delete"
+            data-env-id="${envId}" data-key="${esc(k)}">×</button>
+        </td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
 
-            if (result.migrated) {
-                // Legacy v1 vault detected — re-save in v2 format transparently
-                await autoSave();
-                alert(
-                    'Vault migrated to secure v2 format.\n\n' +
-                    'Your data has been re-encrypted with the new key scheme. ' +
-                    'Download a fresh backup to replace your old one.'
-                );
-            }
-            showVault();
-        } else {
-            alert('Incorrect key or corrupted vault.');
-        }
-    });
+/* ── Env actions (delegated) ────────────────────────── */
+async function handleEnvAction(e) {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  resetLock();
+  const action = btn.dataset.action;
+  const envId  = parseInt(btn.dataset.id ?? btn.dataset.envId);
 
-    // ── Create new vault ──────────────────────────────────────────────────────
-    const createBtn = document.getElementById('create-btn');
-    createBtn.addEventListener('click', async () => {
-        const raw1 = document.getElementById('new-key').value;
-        const raw2 = document.getElementById('new-confirm').value;
+  if (action === 'env-toggle') {
+    const body = $(`env-body-${envId}`);
+    if (!body) return;
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : '';
+    btn.textContent = open ? '▼' : '▲';
+    return;
+  }
+  if (action === 'env-import') {
+    btn.closest('.env-item').querySelector('.env-file-input')?.click();
+    return;
+  }
+  if (action === 'env-export') {
+    const all   = await dbGetAll();
+    const entry = all.find(x => x.id === envId);
+    const vars  = await getEnvVars(envId);
+    const a     = document.createElement('a');
+    a.href     = URL.createObjectURL(new Blob([formatDotEnv(vars)], { type: 'text/plain' }));
+    a.download = `${entry?.name || 'environment'}.env`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    return;
+  }
+  if (action === 'env-delete') {
+    if (!confirm('Delete this environment and all its variables?')) return;
+    await dbDel(envId);
+    envCache.delete(envId);
+    markUnsaved();
+    renderEnvList();
+    return;
+  }
+  if (action === 'var-toggle') {
+    const row    = btn.closest('tr');
+    const masked = row.querySelector('.env-val-masked');
+    const plain  = row.querySelector('.env-val-plain');
+    const show   = plain.style.display !== 'none';
+    masked.style.display = show ? '' : 'none';
+    plain.style.display  = show ? 'none' : '';
+    btn.textContent = show ? 'View' : 'Hide';
+    return;
+  }
+  if (action === 'var-copy') {
+    const key  = btn.dataset.key;
+    const vars = await getEnvVars(envId);
+    await navigator.clipboard.writeText(vars[key] ?? '');
+    btn.textContent = '✓';
+    btn.classList.add('btn-copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('btn-copied'); }, 1500);
+    return;
+  }
+  if (action === 'var-delete') {
+    const key = btn.dataset.key;
+    if (!confirm(`Delete "${key}"?`)) return;
+    const vars = await getEnvVars(envId);
+    delete vars[key];
+    await saveEnvVars(envId, vars);
+    markUnsaved();
+    await renderEnvList();
+    reopenBody(envId);
+    return;
+  }
+  if (action === 'var-add') {
+    const keyEl = $(`ekey-${envId}`);
+    const valEl = $(`eval-${envId}`);
+    const key   = keyEl.value.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    if (!key) { toast('Key name is required', 'err'); return; }
+    const vars  = await getEnvVars(envId);
+    vars[key]   = valEl.value;
+    await saveEnvVars(envId, vars);
+    keyEl.value = ''; valEl.value = '';
+    markUnsaved();
+    toast(`${key} saved`, 'ok');
+    await renderEnvList();
+    reopenBody(envId);
+    return;
+  }
+}
 
-        if (raw1 !== raw2) { alert('Keys do not match.'); return; }
-        if (sanitizePassword(raw1).length < 10) {
-            alert('Key must be at least 10 characters.'); return;
-        }
+async function handleEnvFileInput(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  const envId   = parseInt(e.target.dataset.id);
+  const newVars = parseDotEnv(await file.text());
+  const count   = Object.keys(newVars).length;
+  if (!count) { toast('No variables found in file', 'err'); return; }
+  const existing = await getEnvVars(envId);
+  await saveEnvVars(envId, { ...existing, ...newVars });
+  e.target.value = '';
+  markUnsaved();
+  toast(`Imported ${count} variable${count !== 1 ? 's' : ''}`, 'ok');
+  await renderEnvList();
+  reopenBody(envId);
+}
 
-        if (hasEdgeWhitespace(raw1)) {
-            const proceed = confirm(
-                'Your password starts or ends with a space.\n\n' +
-                'Spaces will be preserved. Continue?'
-            );
-            if (!proceed) return;
-        }
+function reopenBody(envId) {
+  const body = $(`env-body-${envId}`);
+  const btn  = document.querySelector(`[data-action="env-toggle"][data-id="${envId}"]`);
+  if (body) body.style.display = '';
+  if (btn)  btn.textContent = '▲';
+}
 
-        createBtn.textContent = 'Initializing…';
-        createBtn.disabled = true;
+/* ── New env panel ──────────────────────────────────── */
+function showNewEnvPanel(show) {
+  const p = $('new-env-panel');
+  if (!p) return;
+  p.style.display = show ? '' : 'none';
+  if (show) {
+    newEnvVars = null;
+    $('new-env-name').value = '';
+    updateNewEnvFileLabel();
+    $('new-env-name').focus();
+  }
+}
 
-        const salt  = crypto.getRandomValues(new Uint8Array(16));
-        const keys  = await deriveKeys(raw1, salt);
+function updateNewEnvFileLabel() {
+  const lbl   = $('new-env-file-label');
+  if (!lbl) return;
+  const count = newEnvVars ? Object.keys(newEnvVars).length : 0;
+  lbl.textContent = count
+    ? `✓ ${count} variable${count !== 1 ? 's' : ''} ready to import`
+    : 'Click or drop a .env file to pre-populate (optional)';
+  lbl.style.color = count ? 'var(--green)' : '';
+}
 
-        // FIX: Clear raw password from DOM immediately after KDF
-        document.getElementById('new-key').value     = '';
-        document.getElementById('new-confirm').value = '';
+async function createEnv() {
+  const name = $('new-env-name').value.trim();
+  if (!name) { toast('Environment name is required', 'err'); return; }
+  await addEntry(name, JSON.stringify(newEnvVars || {}), 'env', 'env');
+  markUnsaved();
+  showNewEnvPanel(false);
+  toast(`"${name}" created`, 'ok');
+  renderEnvList();
+}
 
-        createBtn.textContent = 'Initialize Encrypted Storage';
-        createBtn.disabled = false;
+/* ── Misc UI ────────────────────────────────────────── */
+function markUnsaved() { $('sync-banner').style.display = 'flex'; }
 
-        sessionKeys = { aesKey: keys.aesKey, hmacKey: keys.hmacKey, salt };
-        await autoSave();
-        showVault();
-    });
+async function exportBackup() {
+  const all = await dbGetAll();
+  const kdf = (await metaGet('kdf')) || KDF_PBKDF2;
+  const data = { version: VERSION, kdf, salt: b64e(SALT), entries: all, ts: Date.now() };
+  const a   = document.createElement('a');
+  a.href    = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type:'application/json' }));
+  a.download = `vault_backup_${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  $('sync-banner').style.display = 'none';
+}
 
-    // ── Add entry ─────────────────────────────────────────────────────────────
-    document.getElementById('add-btn').addEventListener('click', async () => {
-        const name    = document.getElementById('n-name').value.trim();
-        const content = document.getElementById('n-content').value;
-        if (!name || !content.trim()) {
-            alert('Title and content are both required.'); return;
-        }
+/* ── Change password — always upgrades to PBKDF2 ───── */
+async function changePassword() {
+  const np  = $('change-pass-new').value;
+  const nc  = $('change-pass-confirm').value;
+  if (np.length < 10) { toast('Min. 10 characters required', 'err'); return; }
+  if (np !== nc)       { toast('Keys do not match', 'err'); return; }
+  const btn = $('change-pass-btn');
+  btn.disabled = true; btn.textContent = 'Re-encrypting…';
+  try {
+    const entries = await dbGetAll();
+    const ns  = rnd(16);
+    const nk  = await deriveKeyPbkdf2(np, ns);
+    const re  = await reEncryptAll(entries, CK, nk);
+    await dbClear();
+    for (const e of re) { const { id, ...rest } = e; await dbAdd(rest); }
+    CK = nk; SALT = ns;
+    await metaPut('salt', b64e(ns));
+    await metaPut('kdf',  KDF_PBKDF2);
+    envCache.clear();
+    $('change-pass-new').value = ''; $('change-pass-confirm').value = '';
+    markUnsaved();
+    toast('Master key updated', 'ok');
+  } catch (err) {
+    toast('Re-encryption failed: ' + err.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Update & re-encrypt';
+  }
+}
 
-        vaultData[activeTab].push({
-            id:      generateId(),          // FIX: crypto.getRandomValues-based
-            name,
-            content,
-            tag:     document.getElementById('n-tag').value.trim()
-        });
+/* ── Wipe ───────────────────────────────────────────── */
+async function wipeVault() {
+  if (!confirm('Permanently delete ALL vault data? This cannot be undone.')) return;
+  await dbClear(); await metaClr();
+  CK = null; SALT = null; envCache.clear(); stopLock();
+  $('vault-view').style.display   = 'none';
+  $('auth-view').style.display    = '';
+  $('sidebar-meta').style.display = 'none';
+  $('sync-banner').style.display  = 'none';
+  $('tab-unlock').style.display   = 'none';
+  setAuthMode('new');
+  toast('Vault wiped', 'info');
+}
 
-        document.getElementById('n-name').value    = '';
-        document.getElementById('n-content').value = '';
-        document.getElementById('n-tag').value     = '';
+/* ── Init ───────────────────────────────────────────── */
+async function init() {
+  DB = await openDB();
+  $('app-version').textContent = VERSION;
 
-        await autoSave();
-        renderList();
-    });
+  const hasSalt = !!(await metaGet('salt'));
+  document.querySelectorAll('#auth-view .tab').forEach(t =>
+    t.addEventListener('click', () => setAuthMode(t.dataset.mode))
+  );
+  if (hasSalt) {
+    $('tab-unlock').style.display = '';
+    setAuthMode('unlock');
+    $('unlock-key').focus();
+  } else {
+    setAuthMode('new');
+    $('new-key').focus();
+  }
 
-    // ── Export backup ─────────────────────────────────────────────────────────
-    document.getElementById('export-btn').addEventListener('click', async () => {
-        const blob = await getBlob();
-        if (!blob) return;
+  /* Create new vault (always PBKDF2) */
+  $('create-btn').addEventListener('click', async () => {
+    const key  = $('new-key').value;
+    const conf = $('new-confirm').value;
+    if (key.length < 10) { toast('Min. 10 characters required', 'err'); return; }
+    if (key !== conf)     { toast('Keys do not match', 'err'); return; }
+    const btn = $('create-btn');
+    btn.disabled = true; btn.textContent = 'Initialising…';
+    try {
+      const s = rnd(16);
+      CK = await deriveKeyPbkdf2(key, s);
+      SALT = s;
+      await metaPut('salt', b64e(s));
+      await metaPut('kdf',  KDF_PBKDF2);
+      $('new-key').value = ''; $('new-confirm').value = '';
+      unlockUI();
+    } catch (err) { toast('Failed: ' + err.message, 'err'); }
+    finally { btn.disabled = false; btn.textContent = 'Initialize encrypted storage'; }
+  });
 
-        // FIX: Timestamp removed from export — it was metadata leakage that
-        //      could be used to correlate vault activity to a specific time.
-        const pkg = { version: VAULT_VERSION, payload: blob };
-        const url = URL.createObjectURL(
-            new Blob([JSON.stringify(pkg, null, 2)], { type: 'application/json' })
+  /* Unlock — detect KDF, auto-migrate Argon2 vaults in background */
+  $('unlock-btn').addEventListener('click', async () => {
+    const key = $('unlock-key').value;
+    if (!key) { toast('Enter your master key', 'err'); return; }
+    const btn = $('unlock-btn');
+    btn.disabled = true; btn.textContent = 'Unlocking…';
+    try {
+      const saltStr = await metaGet('salt');
+      if (!saltStr) throw new Error('No vault found');
+      // No kdf in meta → old vault → Argon2id
+      const kdf = (await metaGet('kdf')) || KDF_ARGON2;
+      const s   = b64d(saltStr);
+      if (kdf === KDF_ARGON2) btn.textContent = 'Loading Argon2…';
+      const k = await deriveKey(key, s, kdf);
+      // Verify against first entry
+      const entries = await dbGetAll();
+      if (entries.length) {
+        await crypto.subtle.decrypt(
+          { name:'AES-GCM', iv: b64d(entries[0].encrypted.iv) }, k, b64d(entries[0].encrypted.ct)
         );
-        const a = document.createElement('a');
-        a.href     = url;
-        a.download = `vault_backup_v${VAULT_VERSION}.json`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-        setBannerVisible(false);
-    });
+      }
+      CK = k; SALT = s;
+      unlockUI();
+      // Background migrate if Argon2
+      if (kdf === KDF_ARGON2) migrateToArgon2(key);
+    } catch (err) {
+      const msg = err.message?.includes('Argon2') || err.message?.includes('argon2')
+        ? err.message : 'Incorrect master key';
+      toast(msg, 'err');
+    } finally { btn.disabled = false; btn.textContent = 'Unlock vault'; $('unlock-key').value = ''; }
+  });
 
-    // ── Restore from backup ───────────────────────────────────────────────────
-    document.getElementById('restore-zone').addEventListener('click', () =>
-        document.getElementById('file-input').click()
-    );
+  /* Restore backup — detect KDF, decrypt, immediately migrate if Argon2 */
+  $('restore-zone').addEventListener('click', () => $('file-input').click());
+  $('file-input').addEventListener('change', e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = ev => {
+      try {
+        pendingBackup = JSON.parse(ev.target.result);
+        $('file-label').textContent = `✓ ${f.name}`;
+        $('file-label').classList.add('staged');
+      } catch { toast('Invalid backup file', 'err'); }
+    };
+    r.readAsText(f);
+  });
 
-    document.getElementById('file-input').addEventListener('change', e => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const r = new FileReader();
-        r.onload = ev => {
-            try {
-                const imp  = JSON.parse(ev.target.result);
-                stagedBlob = imp.payload ?? imp;
-                const label = document.getElementById('file-label');
-                label.textContent = `Staged: ${imp.version ?? 'unknown version'}`;
-                label.classList.add('staged');
-            } catch {
-                alert('Invalid JSON file.');
-            }
-        };
-        r.readAsText(file);
-    });
+  $('restore-btn').addEventListener('click', async () => {
+    if (!pendingBackup) { toast('Upload a backup file first', 'err'); return; }
+    const key = $('restore-key').value;
+    if (!key) { toast('Enter the master key', 'err'); return; }
+    const btn = $('restore-btn');
+    btn.disabled = true; btn.textContent = 'Restoring…';
+    try {
+      // No kdf field in backup → old backup → Argon2id
+      const backupKdf = pendingBackup.kdf || KDF_ARGON2;
+      const s = b64d(pendingBackup.salt);
+      if (backupKdf === KDF_ARGON2) btn.textContent = 'Loading Argon2…';
+      const k = await deriveKey(key, s, backupKdf);
+      // Verify
+      if (pendingBackup.entries?.length) {
+        const e0 = pendingBackup.entries[0];
+        await crypto.subtle.decrypt(
+          { name:'AES-GCM', iv: b64d(e0.encrypted.iv) }, k, b64d(e0.encrypted.ct)
+        );
+      }
+      // Write entries
+      await dbClear();
+      for (const e of (pendingBackup.entries || [])) { const { id, ...rest } = e; await dbAdd(rest); }
+      await metaPut('salt', pendingBackup.salt);
+      await metaPut('kdf',  backupKdf);
+      CK = k; SALT = s;
 
-    const restoreBtn = document.getElementById('restore-btn');
-    restoreBtn.addEventListener('click', async () => {
-        if (!stagedBlob) { alert('No backup staged yet.'); return; }
-        const raw = document.getElementById('restore-key').value;
-        if (!raw)  { alert('Enter the master key for this backup.'); return; }
+      // Immediately re-encrypt under PBKDF2 if backup was Argon2
+      if (backupKdf === KDF_ARGON2) {
+        btn.textContent = 'Migrating to PBKDF2…';
+        const entries = await dbGetAll();
+        const ns = rnd(16);
+        const nk = await deriveKeyPbkdf2(key, ns);
+        const re = await reEncryptAll(entries, CK, nk);
+        await dbClear();
+        for (const e of re) { const { id, ...rest } = e; await dbAdd(rest); }
+        CK = nk; SALT = ns;
+        await metaPut('salt', b64e(ns));
+        await metaPut('kdf',  KDF_PBKDF2);
+        toast('Backup restored & migrated to PBKDF2', 'info');
+      }
 
-        restoreBtn.textContent = 'Decrypting…';
-        restoreBtn.disabled = true;
+      $('restore-key').value = '';
+      markUnsaved();
+      unlockUI();
+    } catch (err) {
+      const msg = err.message?.includes('Argon2') || err.message?.includes('argon2')
+        ? err.message : 'Wrong key or corrupt backup';
+      toast(msg, 'err');
+    } finally { btn.disabled = false; btn.textContent = 'Restore & decrypt'; }
+  });
 
-        const result = await decryptBlob(stagedBlob, raw);
+  document.querySelectorAll('#main-tabs .tab').forEach(t =>
+    t.addEventListener('click', () => switchTab(t.dataset.tab))
+  );
 
-        restoreBtn.textContent = 'Restore & Decrypt';
-        restoreBtn.disabled = false;
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('.toggle-btn');
+    if (!btn) return;
+    const inp = $(btn.dataset.target);
+    if (!inp) return;
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+    btn.textContent = inp.type === 'password' ? '👁' : '🙈';
+  });
 
-        if (result) {
-            sessionKeys = { aesKey: result.keys.aesKey, hmacKey: result.keys.hmacKey, salt: result.salt };
-            vaultData   = result.data;
-            document.getElementById('restore-key').value = '';
-            await autoSave();
+  $('list-container').addEventListener('click', handleEntryAction);
+  $('env-list-container').addEventListener('click', handleEnvAction);
 
-            if (result.migrated) {
-                alert(
-                    'Legacy backup restored and migrated to v2 format.\n\n' +
-                    'Your data has been re-encrypted with the new secure key scheme. ' +
-                    'Download a fresh backup to replace your old one.'
-                );
-            }
-            showVault();
-        } else {
-            alert(
-                'Restoration failed.\n\n' +
-                'Possible reasons:\n' +
-                '• Wrong master key\n' +
-                '• File is corrupted or not a valid vault backup'
-            );
-        }
-    });
+  $('add-btn').addEventListener('click', async () => {
+    const name    = $('n-name').value.trim();
+    const content = $('n-content').value.trim();
+    const tag     = $('n-tag').value.trim();
+    if (!name || !content) { toast('Name and content are required', 'err'); return; }
+    const type = { passwords:'pw', keys:'key', certs:'cert' }[curTab] || 'pw';
+    await addEntry(name, content, tag, type);
+    $('n-name').value = ''; $('n-content').value = ''; $('n-tag').value = '';
+    markUnsaved();
+    renderEntryList();
+  });
 
-    // ── Content importer (for keys / certs) ───────────────────────────────────
-    document.getElementById('content-zone').addEventListener('click', () =>
-        document.getElementById('content-uploader').click()
-    );
-    document.getElementById('content-uploader').addEventListener('change', e => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const r = new FileReader();
-        r.onload = ev => {
-            document.getElementById('n-content').value = ev.target.result;
-            if (!document.getElementById('n-name').value)
-                document.getElementById('n-name').value = file.name;
-        };
-        r.readAsText(file);
-    });
+  $('v-search').addEventListener('input', renderEntryList);
+  $('env-search').addEventListener('input', renderEnvList);
 
-    // ── Change master key ─────────────────────────────────────────────────────
-    const changeBtn = document.getElementById('change-pass-btn');
-    changeBtn.addEventListener('click', async () => {
-        const raw1 = document.getElementById('change-pass-new').value;
-        const raw2 = document.getElementById('change-pass-confirm').value;
+  $('content-zone').addEventListener('click', () => $('content-uploader').click());
+  $('content-uploader').addEventListener('change', e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = ev => {
+      $('n-content').value = ev.target.result;
+      if (!$('n-name').value) $('n-name').value = f.name;
+    };
+    r.readAsText(f);
+  });
 
-        if (raw1 !== raw2) { alert('Keys do not match.'); return; }
-        if (sanitizePassword(raw1).length < 10) {
-            alert('Key must be at least 10 characters.'); return;
-        }
-        if (!confirm('Re-encrypt the entire vault with the new key?')) return;
+  $('new-env-btn').addEventListener('click', () => showNewEnvPanel(true));
+  $('cancel-env-btn').addEventListener('click', () => showNewEnvPanel(false));
+  $('create-env-btn').addEventListener('click', createEnv);
+  $('new-env-import-zone').addEventListener('click', () => $('new-env-file-input').click());
+  $('new-env-file-input').addEventListener('change', async e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    newEnvVars = parseDotEnv(await f.text());
+    updateNewEnvFileLabel();
+  });
 
-        changeBtn.textContent = 'Re-encrypting…';
-        changeBtn.disabled = true;
+  $('change-pass-btn').addEventListener('click', changePassword);
+  $('wipe-btn').addEventListener('click', wipeVault);
+  $('lock-btn').addEventListener('click', lockVault);
+  $('export-btn').addEventListener('click', exportBackup);
 
-        try {
-            // New password → new salt → new keys
-            const newSalt = crypto.getRandomValues(new Uint8Array(16));
-            const newKeys = await deriveKeys(raw1, newSalt);
+  document.addEventListener('keydown', resetLock);
+  document.addEventListener('click',   resetLock);
 
-            // FIX: Clear raw password from DOM immediately
-            document.getElementById('change-pass-new').value     = '';
-            document.getElementById('change-pass-confirm').value = '';
+  $('unlock-key').addEventListener('keydown',   e => { if (e.key === 'Enter') $('unlock-btn').click(); });
+  $('new-confirm').addEventListener('keydown',  e => { if (e.key === 'Enter') $('create-btn').click(); });
+  $('new-env-name').addEventListener('keydown', e => { if (e.key === 'Enter') $('create-env-btn').click(); });
+}
 
-            sessionKeys = { aesKey: newKeys.aesKey, hmacKey: newKeys.hmacKey, salt: newSalt };
-            await autoSave();
-            alert('Key updated — vault re-encrypted with new credentials.');
-        } catch (e) {
-            alert('Change failed: ' + e.message);
-        } finally {
-            changeBtn.textContent = 'Update & Re-encrypt';
-            changeBtn.disabled = false;
-        }
-    });
-
-    // ── Lock & Wipe ───────────────────────────────────────────────────────────
-    document.getElementById('lock-btn').addEventListener('click', () => lockVault());
-
-    document.getElementById('wipe-btn').addEventListener('click', async () => {
-        if (confirm('Permanently delete ALL vault data? This cannot be undone.')) {
-            await clearDB();
-            window.location.reload();
-        }
-    });
-
-    // ── Search ────────────────────────────────────────────────────────────────
-    document.getElementById('v-search').addEventListener('input', renderList);
-});
+document.addEventListener('DOMContentLoaded', init);
