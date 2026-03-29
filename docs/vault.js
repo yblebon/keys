@@ -1,17 +1,21 @@
 'use strict';
-/* Vault — vault.js v1.3.0
+/* Vault — vault.js v1.4.0
    AES-256-GCM + PBKDF2-SHA256 (new) / Argon2id (legacy compat)
    Backward compatible: old Argon2id backups are auto-migrated to
    PBKDF2 on restore/unlock. KDF is stored in meta + backup JSON. */
 
-const VERSION     = 'v1.3.3';
+const VERSION     = 'v1.4.0';
 const DB_NAME     = 'vault_db';
 const STORE       = 'entries';
 const LOCK_MS     = 5 * 60 * 1000;
 const KDF_PBKDF2  = 'pbkdf2';
 const KDF_ARGON2  = 'argon2id';
 // CDN URL for Argon2 — only injected when an old backup/vault needs it
-const ARGON2_CDN  = 'https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js';
+const ARGON2_CDN = 'https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js';
+// SRI hash for the above file. Compute with:
+//   curl -sL <ARGON2_CDN> | openssl dgst -sha256 -binary | openssl base64
+// Then prefix with 'sha256-'. Leave empty to skip SRI (NOT recommended for production).
+const ARGON2_SRI = '';
 
 /* ── State ─────────────────────────────────────────── */
 let CK            = null;
@@ -29,7 +33,12 @@ let lastSyncTime  = null;  // Date of last successful backup export
 /* ── Codec helpers ─────────────────────────────────── */
 const te    = new TextEncoder();
 const td    = new TextDecoder();
-const b64e  = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const b64e  = buf => {
+  const bytes = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+};
 const b64d  = s   => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 const rnd   = n   => { const b = new Uint8Array(n); crypto.getRandomValues(b); return b; };
 
@@ -74,11 +83,15 @@ function loadArgon2() {
     const s = document.createElement('script');
     s.src = ARGON2_CDN;
     s.crossOrigin = 'anonymous';
+    if (ARGON2_SRI) s.integrity = ARGON2_SRI; // SRI verification when hash is provided
     s.onload  = () => window.argon2 ? resolve() : reject(new Error('argon2 not exposed after load'));
-    s.onerror = () => reject(new Error(
-      'Could not load Argon2 library from CDN. ' +
-      'Check your internet connection, or serve argon2-bundled.min.js locally as a fallback.'
-    ));
+    s.onerror = () => {
+      argon2LoadPromise = null; // reset so caller can retry
+      reject(new Error(
+        'Could not load Argon2 library from CDN. ' +
+        'Check your internet connection, or serve argon2-bundled.min.js locally as a fallback.'
+      ));
+    };
     document.head.appendChild(s);
   });
   return argon2LoadPromise;
@@ -139,7 +152,6 @@ async function migrateToPbkdf2(pass) {
     await metaPut('kdf',  KDF_PBKDF2);
     envCache.clear();
     markUnsaved();
-    CUR_KDF = KDF_PBKDF2;
     updateSidebarMeta();
     toast('Vault migrated from Argon2id → PBKDF2', 'info');
   } catch (err) {
@@ -180,6 +192,7 @@ const txS   = rw    => DB.transaction(STORE, rw ? 'readwrite' : 'readonly').obje
 const txM   = rw    => DB.transaction('meta',  rw ? 'readwrite' : 'readonly').objectStore('meta');
 
 const dbGetAll = ()     => wrap(txS().getAll());
+const dbGet    = id     => wrap(txS().get(id));
 const dbAdd    = obj    => wrap(txS(true).add(obj));
 const dbPut    = obj    => wrap(txS(true).put(obj));
 const dbDel    = id     => wrap(txS(true).delete(id));
@@ -223,8 +236,7 @@ function formatDotEnv(vars) {
 /* ── Env cache ──────────────────────────────────────── */
 async function getEnvVars(envId) {
   if (envCache.has(envId)) return envCache.get(envId);
-  const all   = await dbGetAll();
-  const entry = all.find(e => e.id === envId);
+  const entry = await dbGet(envId);
   if (!entry) return {};
   const vars = JSON.parse(await aesDecrypt(entry.encrypted));
   envCache.set(envId, vars);
@@ -232,8 +244,7 @@ async function getEnvVars(envId) {
 }
 
 async function saveEnvVars(envId, vars) {
-  const all   = await dbGetAll();
-  const entry = all.find(e => e.id === envId);
+  const entry = await dbGet(envId);
   if (!entry) return;
   entry.encrypted = await aesEncrypt(JSON.stringify(vars));
   entry.updated   = Date.now();
@@ -367,7 +378,7 @@ async function handleEntryAction(e) {
   const btn = e.target.closest('[data-action]');
   if (!btn) return;
   resetLock();
-  const id     = parseInt(btn.dataset.id);
+  const id     = parseInt(btn.dataset.id, 10);
   const action = btn.dataset.action;
 
   if (action === 'view') {
@@ -388,10 +399,13 @@ async function handleEntryAction(e) {
   if (action === 'copy') {
     const all   = await dbGetAll();
     const entry = all.find(e => e.id === id);
-    await navigator.clipboard.writeText(await aesDecrypt(entry.encrypted));
+    const secret = await aesDecrypt(entry.encrypted);
+    await navigator.clipboard.writeText(secret);
     btn.textContent = '✓ Copied';
     btn.classList.add('btn-copied');
     setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('btn-copied'); }, 1500);
+    // Clear clipboard after 30s
+    setTimeout(() => navigator.clipboard.readText().then(t => { if (t === secret) navigator.clipboard.writeText(''); }).catch(() => {}), 30000);
   }
 
   if (action === 'delete') {
@@ -498,7 +512,7 @@ async function handleEnvAction(e) {
   if (!btn) return;
   resetLock();
   const action = btn.dataset.action;
-  const envId  = parseInt(btn.dataset.id ?? btn.dataset.envId);
+  const envId  = parseInt(btn.dataset.id ?? btn.dataset.envId, 10);
 
   if (action === 'env-toggle') {
     const body = $(`env-body-${envId}`);
@@ -520,7 +534,7 @@ async function handleEnvAction(e) {
     a.href     = URL.createObjectURL(new Blob([formatDotEnv(vars)], { type: 'text/plain' }));
     a.download = `${entry?.name || 'environment'}.env`;
     a.click();
-    URL.revokeObjectURL(a.href);
+    setTimeout(() => URL.revokeObjectURL(a.href), 100);
     return;
   }
   if (action === 'env-delete') {
@@ -544,10 +558,12 @@ async function handleEnvAction(e) {
   if (action === 'var-copy') {
     const key  = btn.dataset.key;
     const vars = await getEnvVars(envId);
-    await navigator.clipboard.writeText(vars[key] ?? '');
+    const val = vars[key] ?? '';
+    await navigator.clipboard.writeText(val);
     btn.textContent = '✓';
     btn.classList.add('btn-copied');
     setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('btn-copied'); }, 1500);
+    setTimeout(() => navigator.clipboard.readText().then(t => { if (t === val) navigator.clipboard.writeText(''); }).catch(() => {}), 30000);
     return;
   }
   if (action === 'var-delete') {
@@ -581,7 +597,7 @@ async function handleEnvAction(e) {
 async function handleEnvFileInput(e) {
   const file = e.target.files?.[0];
   if (!file) return;
-  const envId   = parseInt(e.target.dataset.id);
+  const envId   = parseInt(e.target.dataset.id, 10);
   const newVars = parseDotEnv(await file.text());
   const count   = Object.keys(newVars).length;
   if (!count) { toast('No variables found in file', 'err'); return; }
@@ -642,9 +658,9 @@ async function exportBackup() {
   const data = { version: VERSION, kdf: CUR_KDF, salt: b64e(SALT), entries: all, ts: Date.now() };
   const a   = document.createElement('a');
   a.href    = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type:'application/json' }));
-  a.download = `vault_backup_${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `vault_backup_${VERSION}_${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
-  URL.revokeObjectURL(a.href);
+  setTimeout(() => URL.revokeObjectURL(a.href), 100);
   lastSyncTime = new Date();
   updateSidebarMeta();
   $('sync-banner').style.display = 'none';
