@@ -4,7 +4,7 @@
    Backward compatible: old Argon2id backups are auto-migrated to
    PBKDF2 on restore/unlock. KDF is stored in meta + backup JSON. */
 
-const VERSION     = 'v1.3.1';
+const VERSION     = 'v1.3.3';
 const DB_NAME     = 'vault_db';
 const STORE       = 'entries';
 const LOCK_MS     = 5 * 60 * 1000;
@@ -16,6 +16,7 @@ const ARGON2_CDN  = 'https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/arg
 /* ── State ─────────────────────────────────────────── */
 let CK            = null;
 let SALT          = null;
+let CUR_KDF       = KDF_PBKDF2; // always in sync with CK/SALT
 let DB            = null;
 let lockTimer     = null;
 let lockEnd       = 0;
@@ -23,6 +24,7 @@ let curTab        = 'passwords';
 let pendingBackup = null;
 let newEnvVars    = null;
 const envCache    = new Map();
+let lastSyncTime  = null;  // Date of last successful backup export
 
 /* ── Codec helpers ─────────────────────────────────── */
 const te    = new TextEncoder();
@@ -124,7 +126,7 @@ async function reEncryptAll(entries, oldKey, newKey) {
 
 /* ── Background migration: Argon2 → PBKDF2 ──────────── */
 // Called after a successful Argon2 unlock with CK already set.
-async function migrateToArgon2(pass) {
+async function migrateToPbkdf2(pass) {
   try {
     const entries = await dbGetAll();
     const ns  = rnd(16);
@@ -132,11 +134,13 @@ async function migrateToArgon2(pass) {
     const re  = await reEncryptAll(entries, CK, nk);
     await dbClear();
     for (const e of re) { const { id, ...rest } = e; await dbAdd(rest); }
-    CK = nk; SALT = ns;
+    CK = nk; SALT = ns; CUR_KDF = KDF_PBKDF2;
     await metaPut('salt', b64e(ns));
     await metaPut('kdf',  KDF_PBKDF2);
     envCache.clear();
     markUnsaved();
+    CUR_KDF = KDF_PBKDF2;
+    updateSidebarMeta();
     toast('Vault migrated from Argon2id → PBKDF2', 'info');
   } catch (err) {
     console.warn('KDF migration failed (non-fatal):', err);
@@ -255,7 +259,7 @@ function startLock() {
 
 /* ── Lock / unlock ──────────────────────────────────── */
 function lockVault() {
-  CK = null; SALT = null;
+  CK = null; SALT = null; CUR_KDF = KDF_PBKDF2;
   envCache.clear();
   stopLock();
   $('vault-view').style.display    = 'none';
@@ -268,9 +272,11 @@ function lockVault() {
 function unlockUI() {
   $('auth-view').style.display    = 'none';
   $('vault-view').style.display   = '';
-  $('sidebar-meta').style.display = '';
+  $('sidebar-meta').style.display = 'block';
   $('tab-unlock').style.display   = '';
   $('unlock-key').value = '';
+  updateSidebarMeta();
+  updateCounts();
   startLock();
   switchTab('passwords');
 }
@@ -285,13 +291,25 @@ function setAuthMode(mode) {
   );
 }
 
-/* ── Sidebar counts ─────────────────────────────────── */
+/* ── Sidebar counts + meta ──────────────────────────── */
 async function updateCounts(all) {
   if (!all) all = await dbGetAll();
   $('count-pw').textContent   = all.filter(e => e.type === 'pw').length;
   $('count-keys').textContent = all.filter(e => e.type === 'key').length;
   $('count-cert').textContent = all.filter(e => e.type === 'cert').length;
   $('count-env').textContent  = all.filter(e => e.type === 'env').length;
+  // entry-count intentionally not shown (not in sidebar design)
+}
+
+function updateSidebarMeta() {
+  const el = $('last-update');
+  if (!el) return;
+  if (lastSyncTime) {
+    el.textContent = `Synced ${lastSyncTime.toLocaleTimeString()}`;
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
 }
 
 /* ── Tab switching ──────────────────────────────────── */
@@ -412,24 +430,18 @@ async function renderEnvList() {
     const preview = keys.slice(0, 3).join(', ') + (keys.length > 3 ? '…' : '');
     return `
     <div class="env-item" data-id="${e.id}">
-      <div class="env-header">
-        <div class="env-header-left">
-          <span class="env-name">${esc(e.name)}</span>
-          <span class="env-badge">${count} var${count !== 1 ? 's' : ''}</span>
-          ${preview ? `<span class="env-preview">${esc(preview)}</span>` : ''}
-        </div>
-        <div class="entry-actions">
-          <button class="btn btn-ghost" data-action="env-import" data-id="${e.id}"
-            style="font-size:.75rem;padding:5px 11px">↑ Import</button>
-          <input type="file" accept=".env,text/plain"
-            class="env-file-input" data-id="${e.id}" style="display:none">
-          <button class="btn btn-copy" data-action="env-export" data-id="${e.id}"
-            style="font-size:.75rem;padding:5px 11px">↓ Export</button>
-          <button class="btn btn-view" data-action="env-toggle" data-id="${e.id}"
-            style="font-size:.75rem;padding:5px 11px">▼</button>
-          <button class="btn btn-del"  data-action="env-delete" data-id="${e.id}"
-            title="Delete environment">×</button>
-        </div>
+      <div class="env-info-row">
+        <span class="env-name">${esc(e.name)}</span>
+        <span class="env-badge">${count} var${count !== 1 ? 's' : ''}</span>
+        ${preview ? `<span class="env-preview">${esc(preview)}</span>` : ''}
+      </div>
+      <div class="env-action-row">
+        <button class="btn btn-ghost" data-action="env-import" data-id="${e.id}">&#8593; Import</button>
+        <input type="file" accept=".env,text/plain"
+          class="env-file-input" data-id="${e.id}" style="display:none">
+        <button class="btn btn-ghost" data-action="env-export" data-id="${e.id}">&#8595; Export</button>
+        <button class="btn btn-view"  data-action="env-toggle" data-id="${e.id}">&#9660;</button>
+        <button class="btn btn-x"     data-action="env-delete" data-id="${e.id}" title="Delete">&times;</button>
       </div>
       <div class="env-body" id="env-body-${e.id}" style="display:none">
         ${renderVarTable(e.id, vars)}
@@ -627,13 +639,14 @@ function markUnsaved() { $('sync-banner').style.display = 'flex'; }
 
 async function exportBackup() {
   const all = await dbGetAll();
-  const kdf = (await metaGet('kdf')) || KDF_PBKDF2;
-  const data = { version: VERSION, kdf, salt: b64e(SALT), entries: all, ts: Date.now() };
+  const data = { version: VERSION, kdf: CUR_KDF, salt: b64e(SALT), entries: all, ts: Date.now() };
   const a   = document.createElement('a');
   a.href    = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type:'application/json' }));
   a.download = `vault_backup_${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
+  lastSyncTime = new Date();
+  updateSidebarMeta();
   $('sync-banner').style.display = 'none';
 }
 
@@ -652,7 +665,7 @@ async function changePassword() {
     const re  = await reEncryptAll(entries, CK, nk);
     await dbClear();
     for (const e of re) { const { id, ...rest } = e; await dbAdd(rest); }
-    CK = nk; SALT = ns;
+    CK = nk; SALT = ns; CUR_KDF = KDF_PBKDF2;
     await metaPut('salt', b64e(ns));
     await metaPut('kdf',  KDF_PBKDF2);
     envCache.clear();
@@ -670,7 +683,7 @@ async function changePassword() {
 async function wipeVault() {
   if (!confirm('Permanently delete ALL vault data? This cannot be undone.')) return;
   await dbClear(); await metaClr();
-  CK = null; SALT = null; envCache.clear(); stopLock();
+  CK = null; SALT = null; CUR_KDF = KDF_PBKDF2; envCache.clear(); stopLock();
   $('vault-view').style.display   = 'none';
   $('auth-view').style.display    = '';
   $('sidebar-meta').style.display = 'none';
@@ -710,6 +723,7 @@ async function init() {
       const s = rnd(16);
       CK = await deriveKeyPbkdf2(key, s);
       SALT = s;
+      CUR_KDF = KDF_PBKDF2;
       await metaPut('salt', b64e(s));
       await metaPut('kdf',  KDF_PBKDF2);
       $('new-key').value = ''; $('new-confirm').value = '';
@@ -739,10 +753,10 @@ async function init() {
           { name:'AES-GCM', iv: b64d(entries[0].encrypted.iv) }, k, b64d(entries[0].encrypted.ct)
         );
       }
-      CK = k; SALT = s;
+      CK = k; SALT = s; CUR_KDF = kdf;
       unlockUI();
-      // Background migrate if Argon2
-      if (kdf === KDF_ARGON2) migrateToArgon2(key);
+      // Background migrate if Argon2 — migrateToPbkdf2 updates CUR_KDF when done
+      if (kdf === KDF_ARGON2) migrateToPbkdf2(key);
     } catch (err) {
       const msg = err.message?.includes('Argon2') || err.message?.includes('argon2')
         ? err.message : 'Incorrect master key';
@@ -790,7 +804,7 @@ async function init() {
       for (const e of (pendingBackup.entries || [])) { const { id, ...rest } = e; await dbAdd(rest); }
       await metaPut('salt', pendingBackup.salt);
       await metaPut('kdf',  backupKdf);
-      CK = k; SALT = s;
+      CK = k; SALT = s; CUR_KDF = backupKdf;
 
       // Immediately re-encrypt under PBKDF2 if backup was Argon2
       if (backupKdf === KDF_ARGON2) {
@@ -804,6 +818,7 @@ async function init() {
         CK = nk; SALT = ns;
         await metaPut('salt', b64e(ns));
         await metaPut('kdf',  KDF_PBKDF2);
+        CUR_KDF = KDF_PBKDF2;
         toast('Backup restored & migrated to PBKDF2', 'info');
       }
 
