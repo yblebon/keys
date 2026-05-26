@@ -366,10 +366,18 @@ async function renderEntryList() {
         <div class="entry-actions">
           <button class="btn btn-view"  data-action="view"   data-id="${e.id}">View</button>
           <button class="btn btn-copy"  data-action="copy"   data-id="${e.id}">Copy</button>
+          <button class="btn btn-edit"  data-action="edit"   data-id="${e.id}">Edit</button>
           <button class="btn btn-del"   data-action="delete" data-id="${e.id}" title="Delete">×</button>
         </div>
       </div>
       <div class="secret-area" id="sec-${e.id}"></div>
+      <div class="edit-area" id="edit-${e.id}" style="display:none">
+        <textarea class="edit-textarea" id="edit-ta-${e.id}" spellcheck="false"></textarea>
+        <div class="edit-actions">
+          <button class="btn btn-primary" data-action="edit-save"   data-id="${e.id}">Save</button>
+          <button class="btn btn-ghost"   data-action="edit-cancel" data-id="${e.id}">Cancel</button>
+        </div>
+      </div>
     </div>`).join('');
 }
 
@@ -406,6 +414,55 @@ async function handleEntryAction(e) {
     setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('btn-copied'); }, 1500);
     // Clear clipboard after 30s
     setTimeout(() => navigator.clipboard.readText().then(t => { if (t === secret) navigator.clipboard.writeText(''); }).catch(() => {}), 30000);
+  }
+
+  if (action === 'edit') {
+    const editArea = $(`edit-${id}`);
+    const already  = editArea.style.display !== 'none';
+    if (already) { editArea.style.display = 'none'; return; }
+    // Close any other open edit areas
+    document.querySelectorAll('.edit-area').forEach(el => el.style.display = 'none');
+    // Collapse view area if open
+    const secArea = $(`sec-${id}`);
+    if (secArea.classList.contains('active')) {
+      secArea.textContent = '';
+      secArea.classList.remove('active');
+      const viewBtn = document.querySelector(`[data-action="view"][data-id="${id}"]`);
+      if (viewBtn) viewBtn.classList.remove('btn-view-active');
+    }
+    const all   = await dbGetAll();
+    const entry = all.find(e => e.id === id);
+    const plain = await aesDecrypt(entry.encrypted);
+    const ta    = $(`edit-ta-${id}`);
+    ta.value    = plain;
+    editArea.style.display = '';
+    ta.focus();
+  }
+
+  if (action === 'edit-save') {
+    const ta      = $(`edit-ta-${id}`);
+    const newVal  = ta.value;
+    if (!newVal.trim()) { toast('Content cannot be empty', 'err'); return; }
+    const saveBtn = document.querySelector(`[data-action="edit-save"][data-id="${id}"]`);
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    try {
+      const all   = await dbGetAll();
+      const entry = all.find(e => e.id === id);
+      entry.encrypted = await aesEncrypt(newVal);
+      entry.updated   = Date.now();
+      await dbPut(entry);
+      $(`edit-${id}`).style.display = 'none';
+      markUnsaved();
+      toast('Entry updated', 'ok');
+    } catch (err) {
+      toast('Save failed: ' + err.message, 'err');
+    } finally {
+      saveBtn.disabled = false; saveBtn.textContent = 'Save';
+    }
+  }
+
+  if (action === 'edit-cancel') {
+    $(`edit-${id}`).style.display = 'none';
   }
 
   if (action === 'delete') {
@@ -498,8 +555,28 @@ function renderVarTable(envId, vars) {
           <button class="btn btn-copy" data-action="var-copy"
             data-env-id="${envId}" data-key="${esc(k)}"
             style="font-size:.72rem;padding:3px 8px">Copy</button>
+          <button class="btn btn-edit" data-action="var-edit"
+            data-env-id="${envId}" data-key="${esc(k)}"
+            style="font-size:.72rem;padding:3px 8px">Edit</button>
           <button class="btn btn-del" data-action="var-delete"
             data-env-id="${envId}" data-key="${esc(k)}">×</button>
+        </td>
+      </tr>
+      <tr class="var-edit-row" style="display:none">
+        <td colspan="3">
+          <div class="var-edit-area">
+            <div class="input-with-toggle" style="flex:1;position:relative">
+              <input type="password" class="var-edit-input" value="${esc(v)}"
+                autocomplete="off" spellcheck="false">
+              <button class="toggle-btn" data-target-class="var-edit-input"
+                aria-label="Toggle visibility">👁</button>
+            </div>
+            <button class="btn btn-primary" data-action="var-edit-save"
+              data-env-id="${envId}" data-key="${esc(k)}"
+              style="white-space:nowrap;width:auto;padding:8px 14px">Save</button>
+            <button class="btn btn-ghost" data-action="var-edit-cancel"
+              style="width:auto;padding:8px 14px">Cancel</button>
+          </div>
         </td>
       </tr>`).join('')}
     </tbody>
@@ -553,6 +630,40 @@ async function handleEnvAction(e) {
     masked.style.display = show ? '' : 'none';
     plain.style.display  = show ? 'none' : '';
     btn.textContent = show ? 'View' : 'Hide';
+    return;
+  }
+  if (action === 'var-edit') {
+    const varRow  = btn.closest('tr');
+    const editRow = varRow.nextElementSibling;
+    const already = editRow.style.display !== 'none';
+    // Close all other open edit rows in this table first
+    btn.closest('table').querySelectorAll('.var-edit-row').forEach(r => r.style.display = 'none');
+    if (already) return;
+    editRow.style.display = '';
+    editRow.querySelector('.var-edit-input').focus();
+    return;
+  }
+  if (action === 'var-edit-save') {
+    const key    = btn.dataset.key;
+    const input  = btn.closest('.var-edit-area').querySelector('.var-edit-input');
+    const newVal = input.value;
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const vars = await getEnvVars(envId);
+      vars[key]  = newVal;
+      await saveEnvVars(envId, vars);
+      markUnsaved();
+      toast(`${key} updated`, 'ok');
+      await renderEnvList();
+      reopenBody(envId);
+    } catch (err) {
+      toast('Save failed: ' + err.message, 'err');
+      btn.disabled = false; btn.textContent = 'Save';
+    }
+    return;
+  }
+  if (action === 'var-edit-cancel') {
+    btn.closest('.var-edit-row').style.display = 'none';
     return;
   }
   if (action === 'var-copy') {
@@ -855,7 +966,10 @@ async function init() {
   document.addEventListener('click', e => {
     const btn = e.target.closest('.toggle-btn');
     if (!btn) return;
-    const inp = $(btn.dataset.target);
+    // data-target: find by ID; data-target-class: find nearest element by class within container
+    const inp = btn.dataset.target
+      ? $(btn.dataset.target)
+      : btn.closest('.input-with-toggle')?.querySelector(`.${btn.dataset.targetClass}`);
     if (!inp) return;
     inp.type = inp.type === 'password' ? 'text' : 'password';
     btn.textContent = inp.type === 'password' ? '👁' : '🙈';

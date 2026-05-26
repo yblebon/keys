@@ -631,6 +631,82 @@
 
         .secret-area.active { display: block; animation: fadeIn 0.15s ease; }
 
+        /* ── Edit area ─────────────────────────────────────────────────────── */
+        .edit-area {
+            margin-top: 12px;
+            animation: fadeIn 0.15s ease;
+        }
+
+        .edit-textarea {
+            width: 100%;
+            min-height: 100px;
+            background: var(--bg);
+            border: 1px solid var(--border-focus);
+            border-left: 3px solid var(--amber);
+            border-radius: 0 var(--radius) var(--radius) 0;
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 0.82rem;
+            line-height: 1.6;
+            padding: 12px 14px;
+            resize: vertical;
+            box-sizing: border-box;
+            word-break: break-all;
+            white-space: pre-wrap;
+            outline: none;
+        }
+
+        .edit-textarea:focus {
+            border-color: var(--amber);
+            box-shadow: 0 0 0 3px rgba(251,191,36,0.1);
+        }
+
+        .edit-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .btn-edit {
+            color: var(--amber);
+            border-color: rgba(251,191,36,0.2);
+        }
+
+        .btn-edit:hover {
+            background: var(--amber-dim);
+            border-color: rgba(251,191,36,0.4);
+        }
+
+        /* ── Env var inline edit row ───────────────────────────────────────── */
+        .var-edit-row td {
+            padding: 6px 8px 10px;
+            background: var(--bg);
+        }
+
+        .var-edit-area {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .var-edit-input {
+            flex: 1;
+            background: var(--surface);
+            border: 1px solid var(--border-focus);
+            border-radius: var(--radius);
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 0.82rem;
+            padding: 7px 10px;
+            outline: none;
+            min-width: 0;
+        }
+
+        .var-edit-input:focus {
+            border-color: var(--amber);
+            box-shadow: 0 0 0 3px rgba(251,191,36,0.1);
+        }
+
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 
         .empty-state {
