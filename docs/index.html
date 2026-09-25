@@ -339,9 +339,26 @@
         }
 
         /* ── Tabs ──────────────────────────────────────────────────────────── */
+        .tabs-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
         .tabs {
             display: flex;
             gap: 2px;
+            overflow-x: auto;
+            flex: 1;
+            min-width: 0;
+            scrollbar-width: thin;
+        }
+
+        .tabs-pinned {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
         }
 
         .tab {
@@ -355,6 +372,7 @@
             transition: color 0.15s, border-color 0.15s;
             border-radius: 4px 4px 0 0;
             user-select: none;
+            white-space: nowrap;
         }
 
         .tab:hover { color: var(--text2); }
@@ -367,6 +385,92 @@
         .tab.tab-danger { color: var(--text3); }
         .tab.tab-danger:hover { color: var(--red); }
         .tab.tab-danger.active { color: var(--red); border-bottom-color: var(--red); }
+
+        /* User-created tabs */
+        .tab-custom { display: flex; align-items: center; gap: 7px; }
+
+        .tab-count {
+            font-size: 0.65rem;
+            font-weight: 700;
+            background: var(--surface2);
+            color: var(--text3);
+            border-radius: 8px;
+            padding: 1px 6px;
+            min-width: 16px;
+            text-align: center;
+        }
+
+        .tab.active .tab-count { color: var(--accent-bright); background: var(--accent-dim); }
+
+        .tab-close {
+            opacity: 0;
+            transition: opacity 0.15s, color 0.15s;
+            color: var(--text3);
+            font-size: 0.95rem;
+            line-height: 1;
+        }
+
+        .tab-custom:hover .tab-close { opacity: 1; }
+        .tab-close:hover { color: var(--red); }
+
+        .tab-add {
+            background: transparent;
+            border: 1px dashed var(--border-hover);
+            color: var(--text3);
+            padding: 6px 13px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 700;
+            font-size: 0.9rem;
+            line-height: 1;
+            transition: color 0.15s, border-color 0.15s, background 0.15s;
+        }
+
+        .tab-add:hover { color: var(--accent-bright); border-color: var(--accent); background: var(--accent-dim); }
+
+        /* ── Secret-type selector (add-entry form) ───────────────────────────── */
+        .type-select {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 14px;
+            flex-wrap: wrap;
+        }
+
+        .type-btn {
+            flex: 1;
+            min-width: 100px;
+            padding: 9px 10px;
+            text-align: center;
+            cursor: pointer;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text2);
+            font-size: 0.8rem;
+            font-weight: 600;
+            transition: background 0.15s, border-color 0.15s, color 0.15s;
+        }
+
+        .type-btn:hover { border-color: var(--border-hover); }
+
+        .type-btn.active {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            color: var(--accent-bright);
+        }
+
+        /* ── Type badge on mixed entry rows ──────────────────────────────────── */
+        .type-badge {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            border: 1px solid;
+            border-radius: 4px;
+            padding: 1px 5px;
+            margin-right: 7px;
+            vertical-align: middle;
+        }
 
         /* ── Form elements ─────────────────────────────────────────────────── */
         .input-group {
@@ -1073,26 +1177,44 @@
     <div id="vault-view" class="card" style="display:none">
         <div class="card-header">
             <div class="card-header-title">Encrypted storage</div>
-            <div class="tabs" id="main-tabs">
-                <div class="tab active" data-tab="passwords">Passwords</div>
-                <div class="tab" data-tab="keys">Keys</div>
-                <div class="tab" data-tab="certs">Certs</div>
-                <div class="tab" data-tab="envs">Envs</div>
-                <div class="tab tab-danger" data-tab="security">Security</div>
+            <div class="tabs-row" id="main-tabs">
+                <div class="tabs" id="custom-tabs-list"><!-- user tabs rendered here --></div>
+                <div class="tabs-pinned">
+                    <button type="button" class="tab-add" id="add-tab-btn" title="Add tab">+</button>
+                    <div class="tab tab-danger" id="tab-security" data-tab="security">Security</div>
+                </div>
             </div>
         </div>
 
         <div class="card-body">
 
-            <!-- Passwords / Keys / Certs content -->
+            <!-- Tab content: a mixed list of passwords / keys / certs / envs -->
             <div id="vault-content-section">
                 <input type="text" id="v-search" placeholder="Search by title or tag…">
 
+                <!-- Secret type selector -->
+                <div class="type-select" id="type-select">
+                    <button type="button" class="type-btn active" data-type="pw">🔑 Password</button>
+                    <button type="button" class="type-btn" data-type="key">🗝 Key</button>
+                    <button type="button" class="type-btn" data-type="cert">📜 Cert</button>
+                    <button type="button" class="type-btn" data-type="env">🧩 Env</button>
+                </div>
+
                 <!-- File importer (keys + certs only) -->
-                <div id="importer-ui">
+                <div id="importer-ui" style="display:none">
                     <div class="upload-zone" id="content-zone" role="button" aria-label="Import file">
                         <strong>Drop or click to import file content</strong>
                         <input type="file" id="content-uploader" style="display:none">
+                    </div>
+                </div>
+
+                <!-- .env importer (env only) -->
+                <div id="env-importer-ui" style="display:none">
+                    <div class="upload-zone" id="new-env-import-zone"
+                         role="button" aria-label="Import .env file">
+                        <span id="new-env-file-label">Click or drop a .env file to pre-populate (optional)</span>
+                        <input type="file" id="new-env-file-input"
+                               style="display:none" accept=".env,text/plain">
                     </div>
                 </div>
 
@@ -1105,43 +1227,6 @@
                 <button id="add-btn" class="btn btn-primary">Encrypt &amp; save entry</button>
 
                 <div id="list-container"></div>
-            </div>
-
-            <!-- Environments section -->
-            <div id="envs-section" style="display:none">
-                <!-- Top bar -->
-                <div class="env-top-bar">
-                    <input type="text" id="env-search" placeholder="Search environments…" style="flex:1;margin:0">
-                    <button id="new-env-btn" class="btn btn-primary"
-                        style="width:auto;padding:10px 18px;white-space:nowrap">+ New env</button>
-                </div>
-
-                <!-- New env panel (hidden by default) -->
-                <div id="new-env-panel" class="new-env-panel" style="display:none">
-                    <div class="input-group">
-                        <label for="new-env-name">Environment name</label>
-                        <input type="text" id="new-env-name"
-                               placeholder="e.g. production, staging, local"
-                               autocomplete="off">
-                    </div>
-                    <div class="upload-zone" id="new-env-import-zone"
-                         role="button" aria-label="Import .env file"
-                         style="margin-bottom:12px">
-                        <span id="new-env-file-label">Click or drop a .env file to pre-populate (optional)</span>
-                        <input type="file" id="new-env-file-input"
-                               style="display:none" accept=".env,text/plain">
-                    </div>
-                    <div style="display:flex;gap:8px">
-                        <button id="create-env-btn" class="btn btn-primary" style="flex:1">
-                            Create environment
-                        </button>
-                        <button id="cancel-env-btn" class="btn btn-ghost"
-                            style="width:auto;padding:10px 18px">Cancel</button>
-                    </div>
-                </div>
-
-                <!-- Env list -->
-                <div id="env-list-container"></div>
             </div>
 
             <!-- Security section -->

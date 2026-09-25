@@ -1,12 +1,21 @@
 'use strict';
-/* Vault — vault.js v1.4.0
+/* Vault — vault.js v2.0.0
    AES-256-GCM + PBKDF2-SHA256 (new) / Argon2id (legacy compat)
    Backward compatible: old Argon2id backups are auto-migrated to
-   PBKDF2 on restore/unlock. KDF is stored in meta + backup JSON. */
+   PBKDF2 on restore/unlock. KDF is stored in meta + backup JSON.
 
-const VERSION     = 'v1.4.0';
+   v2.0.0 — Tabs redesign: secrets no longer live in fixed
+   Passwords/Keys/Certs/Envs tabs. Instead the user creates their own
+   named tabs; each tab holds a mixed list of secrets of any type
+   (password / key / cert / env). Existing vaults are migrated
+   automatically: the old fixed categories become tabs of the same
+   name, and every entry is assigned to the tab matching its type. */
+
+const VERSION     = 'v2.0.0';
 const DB_NAME     = 'vault_db';
+const DB_VERSION  = 2;           // bumped to add the 'tabs' store
 const STORE       = 'entries';
+const STORE_TABS  = 'tabs';
 const LOCK_MS     = 5 * 60 * 1000;
 const KDF_PBKDF2  = 'pbkdf2';
 const KDF_ARGON2  = 'argon2id';
@@ -17,6 +26,11 @@ const ARGON2_CDN = 'https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argo
 // Then prefix with 'sha256-'. Leave empty to skip SRI (NOT recommended for production).
 const ARGON2_SRI = '';
 
+// Default names used when migrating a legacy (pre-tabs) vault/backup.
+const TYPE_TAB_DEFAULTS = { pw: 'Passwords', key: 'Keys', cert: 'Certs', env: 'Envs' };
+const TYPE_LABELS = { pw: 'PW', key: 'KEY', cert: 'CERT', env: 'ENV' };
+const TYPE_COLORS = { pw: 'var(--accent-bright)', key: 'var(--purple)', cert: 'var(--amber)', env: 'var(--green)' };
+
 /* ── State ─────────────────────────────────────────── */
 let CK            = null;
 let SALT          = null;
@@ -24,7 +38,9 @@ let CUR_KDF       = KDF_PBKDF2; // always in sync with CK/SALT
 let DB            = null;
 let lockTimer     = null;
 let lockEnd       = 0;
-let curTab        = 'passwords';
+let curTabId      = null;   // numeric tab id, or the string 'security'
+let curAddType    = 'pw';   // which secret type the add-form is set to
+let TABS          = [];     // in-memory cache of tabs
 let pendingBackup = null;
 let newEnvVars    = null;
 const envCache    = new Map();
@@ -174,13 +190,15 @@ async function aesDecrypt({ iv, ct }) {
 /* ── IndexedDB ──────────────────────────────────────── */
 function openDB() {
   return new Promise((ok, fail) => {
-    const r = indexedDB.open(DB_NAME, 1);
+    const r = indexedDB.open(DB_NAME, DB_VERSION);
     r.onupgradeneeded = e => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains(STORE))
         d.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
       if (!d.objectStoreNames.contains('meta'))
         d.createObjectStore('meta');
+      if (!d.objectStoreNames.contains(STORE_TABS))
+        d.createObjectStore(STORE_TABS, { keyPath: 'id', autoIncrement: true });
     };
     r.onsuccess = e => ok(e.target.result);
     r.onerror   = e => fail(e.target.error);
@@ -190,6 +208,7 @@ function openDB() {
 const wrap  = r     => new Promise((ok, fail) => { r.onsuccess = () => ok(r.result); r.onerror = () => fail(r.error); });
 const txS   = rw    => DB.transaction(STORE, rw ? 'readwrite' : 'readonly').objectStore(STORE);
 const txM   = rw    => DB.transaction('meta',  rw ? 'readwrite' : 'readonly').objectStore('meta');
+const txT   = rw    => DB.transaction(STORE_TABS, rw ? 'readwrite' : 'readonly').objectStore(STORE_TABS);
 
 const dbGetAll = ()     => wrap(txS().getAll());
 const dbGet    = id     => wrap(txS().get(id));
@@ -201,10 +220,138 @@ const metaGet  = k      => wrap(txM().get(k));
 const metaPut  = (k, v) => wrap(txM(true).put(v, k));
 const metaClr  = ()     => wrap(txM(true).clear());
 
+const tabGetAll = ()    => wrap(txT().getAll());
+const tabAdd    = obj   => wrap(txT(true).add(obj));
+const tabPut    = obj   => wrap(txT(true).put(obj));
+const tabDel    = id    => wrap(txT(true).delete(id));
+const tabsClear = ()    => wrap(txT(true).clear());
+
+/* ── Tabs — creation, migration, rendering ──────────── */
+// Ensures at least one tab exists. On a fresh vault, creates a single
+// "General" tab. On a vault upgraded from the old fixed-category
+// layout (entries exist but no tabs do — or a legacy backup with no
+// `tabs` array), recreates those categories as tabs and backfills
+// every entry's tabId to match its type.
+async function ensureTabsReady() {
+  let tabs = await tabGetAll();
+  if (tabs.length) { TABS = tabs.sort((a, b) => (a.created || 0) - (b.created || 0)); return TABS; }
+
+  const entries = await dbGetAll();
+  if (!entries.length) {
+    const id = await tabAdd({ name: 'General', created: Date.now() });
+    TABS = [{ id, name: 'General', created: Date.now() }];
+    return TABS;
+  }
+
+  const madeIds = {};
+  for (const type of Object.keys(TYPE_TAB_DEFAULTS)) {
+    if (entries.some(e => e.type === type)) {
+      madeIds[type] = await tabAdd({ name: TYPE_TAB_DEFAULTS[type], created: Date.now() });
+    }
+  }
+  const fallbackId = Object.values(madeIds)[0];
+  for (const e of entries) {
+    const tabId = madeIds[e.type] ?? fallbackId;
+    if (tabId !== undefined && e.tabId !== tabId) await dbPut({ ...e, tabId });
+  }
+  TABS = (await tabGetAll()).sort((a, b) => (a.created || 0) - (b.created || 0));
+  return TABS;
+}
+
+async function loadTabs() {
+  TABS = (await tabGetAll()).sort((a, b) => (a.created || 0) - (b.created || 0));
+  return TABS;
+}
+
+async function renderTabsBar() {
+  await loadTabs();
+  const all  = await dbGetAll();
+  const wrap = $('custom-tabs-list');
+  wrap.innerHTML = TABS.map(t => {
+    const count = all.filter(e => e.tabId === t.id).length;
+    return `<div class="tab tab-custom ${t.id === curTabId ? 'active' : ''}" data-tab-id="${t.id}">
+      <span class="tab-label">${esc(t.name)}</span>
+      <span class="tab-count">${count}</span>
+      <span class="tab-close" data-action="delete-tab" data-tab-id="${t.id}" title="Delete tab">×</span>
+    </div>`;
+  }).join('');
+  $('tab-security').classList.toggle('active', curTabId === 'security');
+}
+
+async function updateTabCounts() {
+  const all = await dbGetAll();
+  document.querySelectorAll('.tab-custom').forEach(t => {
+    const id  = parseInt(t.dataset.tabId, 10);
+    const cnt = all.filter(e => e.tabId === id).length;
+    const el  = t.querySelector('.tab-count');
+    if (el) el.textContent = cnt;
+  });
+}
+
+async function addTab() {
+  const name = prompt('New tab name');
+  if (!name || !name.trim()) return;
+  const id = await tabAdd({ name: name.trim(), created: Date.now() });
+  await renderTabsBar();
+  switchTab(id);
+}
+
+async function renameTab(id) {
+  const tab = TABS.find(t => t.id === id);
+  if (!tab) return;
+  const name = prompt('Rename tab', tab.name);
+  if (!name || !name.trim() || name.trim() === tab.name) return;
+  await tabPut({ ...tab, name: name.trim() });
+  await renderTabsBar();
+}
+
+async function deleteTabById(id) {
+  const all   = await dbGetAll();
+  const tab   = TABS.find(t => t.id === id);
+  const owned = all.filter(e => e.tabId === id);
+  const msg   = owned.length
+    ? `Delete "${tab?.name}" and its ${owned.length} secret${owned.length !== 1 ? 's' : ''}? This cannot be undone.`
+    : `Delete "${tab?.name}"?`;
+  if (!confirm(msg)) return;
+  for (const e of owned) await dbDel(e.id);
+  await tabDel(id);
+  await loadTabs();
+  markUnsaved();
+
+  if (!TABS.length) {
+    const newId = await tabAdd({ name: 'General', created: Date.now() });
+    await renderTabsBar();
+    switchTab(newId);
+    return;
+  }
+  await renderTabsBar();
+  if (curTabId === id) switchTab(TABS[0].id);
+}
+
+/* ── Add-entry form: type selector ──────────────────── */
+function resetAddForm() {
+  curAddType = 'pw';
+  document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === 'pw'));
+  $('importer-ui').style.display     = 'none';
+  $('env-importer-ui').style.display = 'none';
+  $('n-content').style.display = '';
+  $('n-name').value = ''; $('n-tag').value = ''; $('n-content').value = '';
+  newEnvVars = null;
+  updateNewEnvFileLabel();
+}
+
+function setAddType(type) {
+  curAddType = type;
+  document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === type));
+  $('importer-ui').style.display     = (type === 'key' || type === 'cert') ? '' : 'none';
+  $('env-importer-ui').style.display = type === 'env' ? '' : 'none';
+  $('n-content').style.display       = type === 'env' ? 'none' : '';
+}
+
 /* ── Entry helpers ──────────────────────────────────── */
-async function addEntry(name, content, tag, type) {
+async function addEntry(name, content, tag, type, tabId) {
   const encrypted = await aesEncrypt(content);
-  return dbAdd({ name, tag: tag || '', type, encrypted, created: Date.now() });
+  return dbAdd({ name, tag: tag || '', type, tabId, encrypted, created: Date.now() });
 }
 
 /* ── .env parsing / formatting ──────────────────────── */
@@ -273,6 +420,9 @@ function lockVault() {
   CK = null; SALT = null; CUR_KDF = KDF_PBKDF2;
   envCache.clear();
   stopLock();
+  curTabId = null;
+  TABS = [];
+  $('custom-tabs-list').innerHTML = '';
   $('vault-view').style.display    = 'none';
   $('auth-view').style.display     = '';
   $('sidebar-meta').style.display  = 'none';
@@ -280,7 +430,7 @@ function lockVault() {
   setAuthMode('unlock');
 }
 
-function unlockUI() {
+async function unlockUI() {
   $('auth-view').style.display    = 'none';
   $('vault-view').style.display   = '';
   $('sidebar-meta').style.display = 'block';
@@ -289,7 +439,10 @@ function unlockUI() {
   updateSidebarMeta();
   updateCounts();
   startLock();
-  switchTab('passwords');
+  await ensureTabsReady();
+  await renderTabsBar();
+  resetAddForm();
+  switchTab(TABS.length ? TABS[0].id : 'security');
 }
 
 /* ── Auth mode ──────────────────────────────────────── */
@@ -302,14 +455,13 @@ function setAuthMode(mode) {
   );
 }
 
-/* ── Sidebar counts + meta ──────────────────────────── */
+/* ── Sidebar counts + meta (global, across every tab) ─ */
 async function updateCounts(all) {
   if (!all) all = await dbGetAll();
   $('count-pw').textContent   = all.filter(e => e.type === 'pw').length;
   $('count-keys').textContent = all.filter(e => e.type === 'key').length;
   $('count-cert').textContent = all.filter(e => e.type === 'cert').length;
   $('count-env').textContent  = all.filter(e => e.type === 'env').length;
-  // entry-count intentionally not shown (not in sidebar design)
 }
 
 function updateSidebarMeta() {
@@ -323,43 +475,67 @@ function updateSidebarMeta() {
   }
 }
 
-/* ── Tab switching ──────────────────────────────────── */
-function switchTab(tab) {
-  curTab = tab;
-  document.querySelectorAll('#main-tabs .tab').forEach(t =>
-    t.classList.toggle('active', t.dataset.tab === tab)
-  );
-  $('vault-content-section').style.display = ['passwords','keys','certs'].includes(tab) ? '' : 'none';
-  $('security-section').style.display      = tab === 'security' ? '' : 'none';
-  $('envs-section').style.display          = tab === 'envs'     ? '' : 'none';
+/* ── Tab switching ───────────────────────────────────── */
+function switchTab(tabId) {
+  curTabId = tabId;
+  const isSecurity = tabId === 'security';
+  $('vault-content-section').style.display = isSecurity ? 'none' : '';
+  $('security-section').style.display      = isSecurity ? '' : 'none';
 
-  if (['passwords','keys','certs'].includes(tab)) {
-    $('importer-ui').style.display = tab !== 'passwords' ? '' : 'none';
+  document.querySelectorAll('#custom-tabs-list .tab-custom').forEach(t =>
+    t.classList.toggle('active', parseInt(t.dataset.tabId, 10) === tabId)
+  );
+  $('tab-security').classList.toggle('active', isSecurity);
+
+  if (!isSecurity) {
+    resetAddForm();
     renderEntryList();
-  } else if (tab === 'envs') {
-    renderEnvList();
   }
   resetLock();
 }
 
-/* ── Entry list ─────────────────────────────────────── */
+/* ── Type badge (shared by both row renderers) ──────── */
+function typeBadge(type) {
+  const label = TYPE_LABELS[type] || '?';
+  const color = TYPE_COLORS[type] || 'var(--text3)';
+  return `<span class="type-badge" style="color:${color};border-color:${color}">${label}</span>`;
+}
+
+/* ── Entry list (mixed types, scoped to curTabId) ───── */
 async function renderEntryList() {
-  const q    = $('v-search').value.toLowerCase();
-  const type = { passwords:'pw', keys:'key', certs:'cert' }[curTab];
+  if (curTabId === 'security' || curTabId == null) return;
+  const q    = ($('v-search')?.value || '').toLowerCase();
   const all  = await dbGetAll();
-  const rows = all.filter(e => e.type === type &&
-    (!q || e.name.toLowerCase().includes(q) || (e.tag || '').toLowerCase().includes(q))
-  );
+  const rows = all
+    .filter(e => e.tabId === curTabId &&
+      (!q || e.name.toLowerCase().includes(q) || (e.tag || '').toLowerCase().includes(q)))
+    .sort((a, b) => (a.created || 0) - (b.created || 0));
   updateCounts(all);
+
   const c = $('list-container');
   if (!rows.length) {
-    c.innerHTML = `<div class="empty-state">No ${curTab} stored yet.</div>`;
+    c.innerHTML = `<div class="empty-state">No secrets in this tab yet.</div>`;
     return;
   }
-  c.innerHTML = rows.map(e => `
+
+  const rendered = await Promise.all(rows.map(async e => {
+    if (e.type === 'env') {
+      let vars = {};
+      try { vars = JSON.parse(await aesDecrypt(e.encrypted)); envCache.set(e.id, vars); } catch {}
+      return renderEnvItemHTML(e, vars);
+    }
+    return renderEntryItemHTML(e);
+  }));
+  c.innerHTML = rendered.join('');
+  c.querySelectorAll('.env-file-input').forEach(inp => inp.addEventListener('change', handleEnvFileInput));
+}
+
+function renderEntryItemHTML(e) {
+  return `
     <div class="entry-item">
       <div class="entry-row">
         <div>
+          ${typeBadge(e.type)}
           <span class="entry-name">${esc(e.name)}</span>
           ${e.tag ? `<span class="entry-tag">${esc(e.tag)}</span>` : ''}
         </div>
@@ -378,131 +554,19 @@ async function renderEntryList() {
           <button class="btn btn-ghost"   data-action="edit-cancel" data-id="${e.id}">Cancel</button>
         </div>
       </div>
-    </div>`).join('');
+    </div>`;
 }
 
-/* ── Entry actions (delegated) ──────────────────────── */
-async function handleEntryAction(e) {
-  const btn = e.target.closest('[data-action]');
-  if (!btn) return;
-  resetLock();
-  const id     = parseInt(btn.dataset.id, 10);
-  const action = btn.dataset.action;
-
-  if (action === 'view') {
-    const area = $(`sec-${id}`);
-    const open = area.classList.contains('active');
-    if (!open) {
-      const all   = await dbGetAll();
-      const entry = all.find(e => e.id === id);
-      area.textContent = await aesDecrypt(entry.encrypted);
-      btn.classList.add('btn-view-active');
-    } else {
-      area.textContent = '';
-      btn.classList.remove('btn-view-active');
-    }
-    area.classList.toggle('active');
-  }
-
-  if (action === 'copy') {
-    const all   = await dbGetAll();
-    const entry = all.find(e => e.id === id);
-    const secret = await aesDecrypt(entry.encrypted);
-    await navigator.clipboard.writeText(secret);
-    btn.textContent = '✓ Copied';
-    btn.classList.add('btn-copied');
-    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('btn-copied'); }, 1500);
-    // Clear clipboard after 30s
-    setTimeout(() => navigator.clipboard.readText().then(t => { if (t === secret) navigator.clipboard.writeText(''); }).catch(() => {}), 30000);
-  }
-
-  if (action === 'edit') {
-    const editArea = $(`edit-${id}`);
-    const already  = editArea.style.display !== 'none';
-    if (already) { editArea.style.display = 'none'; return; }
-    // Close any other open edit areas
-    document.querySelectorAll('.edit-area').forEach(el => el.style.display = 'none');
-    // Collapse view area if open
-    const secArea = $(`sec-${id}`);
-    if (secArea.classList.contains('active')) {
-      secArea.textContent = '';
-      secArea.classList.remove('active');
-      const viewBtn = document.querySelector(`[data-action="view"][data-id="${id}"]`);
-      if (viewBtn) viewBtn.classList.remove('btn-view-active');
-    }
-    const all   = await dbGetAll();
-    const entry = all.find(e => e.id === id);
-    const plain = await aesDecrypt(entry.encrypted);
-    const ta    = $(`edit-ta-${id}`);
-    ta.value    = plain;
-    editArea.style.display = '';
-    ta.focus();
-  }
-
-  if (action === 'edit-save') {
-    const ta      = $(`edit-ta-${id}`);
-    const newVal  = ta.value;
-    if (!newVal.trim()) { toast('Content cannot be empty', 'err'); return; }
-    const saveBtn = document.querySelector(`[data-action="edit-save"][data-id="${id}"]`);
-    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
-    try {
-      const all   = await dbGetAll();
-      const entry = all.find(e => e.id === id);
-      entry.encrypted = await aesEncrypt(newVal);
-      entry.updated   = Date.now();
-      await dbPut(entry);
-      $(`edit-${id}`).style.display = 'none';
-      markUnsaved();
-      toast('Entry updated', 'ok');
-    } catch (err) {
-      toast('Save failed: ' + err.message, 'err');
-    } finally {
-      saveBtn.disabled = false; saveBtn.textContent = 'Save';
-    }
-  }
-
-  if (action === 'edit-cancel') {
-    $(`edit-${id}`).style.display = 'none';
-  }
-
-  if (action === 'delete') {
-    if (!confirm('Delete this entry?')) return;
-    await dbDel(id);
-    markUnsaved();
-    renderEntryList();
-  }
-}
-
-/* ── Env list ───────────────────────────────────────── */
-async function renderEnvList() {
-  const q    = ($('env-search')?.value || '').toLowerCase();
-  const all  = await dbGetAll();
-  const envs = all.filter(e => e.type === 'env' && (!q || e.name.toLowerCase().includes(q)));
-  updateCounts(all);
-
-  const c = $('env-list-container');
-  if (!c) return;
-  if (!envs.length) {
-    c.innerHTML = `<div class="empty-state">No environments yet — create one or import a .env file.</div>`;
-    return;
-  }
-
-  c.innerHTML = `<div class="empty-state" style="padding:8px 0;font-size:.8rem">Decrypting…</div>`;
-
-  const resolved = await Promise.all(envs.map(async e => {
-    let vars = {};
-    try { vars = JSON.parse(await aesDecrypt(e.encrypted)); envCache.set(e.id, vars); } catch {}
-    return { e, vars };
-  }));
-
-  c.innerHTML = resolved.map(({ e, vars }) => {
-    const keys    = Object.keys(vars);
-    const count   = keys.length;
-    const preview = keys.slice(0, 3).join(', ') + (keys.length > 3 ? '…' : '');
-    return `
+function renderEnvItemHTML(e, vars) {
+  const keys    = Object.keys(vars);
+  const count   = keys.length;
+  const preview = keys.slice(0, 3).join(', ') + (keys.length > 3 ? '…' : '');
+  return `
     <div class="env-item" data-id="${e.id}">
       <div class="env-info-row">
+        ${typeBadge('env')}
         <span class="env-name">${esc(e.name)}</span>
+        ${e.tag ? `<span class="entry-tag">${esc(e.tag)}</span>` : ''}
         <span class="env-badge">${count} var${count !== 1 ? 's' : ''}</span>
         ${preview ? `<span class="env-preview">${esc(preview)}</span>` : ''}
       </div>
@@ -529,11 +593,6 @@ async function renderEnvList() {
         </div>
       </div>
     </div>`;
-  }).join('');
-
-  c.querySelectorAll('.env-file-input').forEach(inp =>
-    inp.addEventListener('change', handleEnvFileInput)
-  );
 }
 
 function renderVarTable(envId, vars) {
@@ -583,12 +642,111 @@ function renderVarTable(envId, vars) {
   </table>`;
 }
 
-/* ── Env actions (delegated) ────────────────────────── */
-async function handleEnvAction(e) {
+/* ── Entry actions (delegated — passwords/keys/certs) ─ */
+async function handleEntryAction(e) {
   const btn = e.target.closest('[data-action]');
   if (!btn) return;
   resetLock();
+  const id     = parseInt(btn.dataset.id, 10);
   const action = btn.dataset.action;
+
+  if (action === 'view') {
+    const area = $(`sec-${id}`);
+    if (!area) return;
+    const open = area.classList.contains('active');
+    if (!open) {
+      const all   = await dbGetAll();
+      const entry = all.find(e => e.id === id);
+      area.textContent = await aesDecrypt(entry.encrypted);
+      btn.classList.add('btn-view-active');
+    } else {
+      area.textContent = '';
+      btn.classList.remove('btn-view-active');
+    }
+    area.classList.toggle('active');
+  }
+
+  if (action === 'copy') {
+    const all   = await dbGetAll();
+    const entry = all.find(e => e.id === id);
+    if (!entry || entry.type === 'env') return;
+    const secret = await aesDecrypt(entry.encrypted);
+    await navigator.clipboard.writeText(secret);
+    btn.textContent = '✓ Copied';
+    btn.classList.add('btn-copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('btn-copied'); }, 1500);
+    // Clear clipboard after 30s
+    setTimeout(() => navigator.clipboard.readText().then(t => { if (t === secret) navigator.clipboard.writeText(''); }).catch(() => {}), 30000);
+  }
+
+  if (action === 'edit') {
+    const editArea = $(`edit-${id}`);
+    if (!editArea) return;
+    const already  = editArea.style.display !== 'none';
+    if (already) { editArea.style.display = 'none'; return; }
+    // Close any other open edit areas
+    document.querySelectorAll('.edit-area').forEach(el => el.style.display = 'none');
+    // Collapse view area if open
+    const secArea = $(`sec-${id}`);
+    if (secArea && secArea.classList.contains('active')) {
+      secArea.textContent = '';
+      secArea.classList.remove('active');
+      const viewBtn = document.querySelector(`[data-action="view"][data-id="${id}"]`);
+      if (viewBtn) viewBtn.classList.remove('btn-view-active');
+    }
+    const all   = await dbGetAll();
+    const entry = all.find(e => e.id === id);
+    const plain = await aesDecrypt(entry.encrypted);
+    const ta    = $(`edit-ta-${id}`);
+    ta.value    = plain;
+    editArea.style.display = '';
+    ta.focus();
+  }
+
+  if (action === 'edit-save') {
+    const ta      = $(`edit-ta-${id}`);
+    const newVal  = ta.value;
+    if (!newVal.trim()) { toast('Content cannot be empty', 'err'); return; }
+    const saveBtn = document.querySelector(`[data-action="edit-save"][data-id="${id}"]`);
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    try {
+      const all   = await dbGetAll();
+      const entry = all.find(e => e.id === id);
+      entry.encrypted = await aesEncrypt(newVal);
+      entry.updated   = Date.now();
+      await dbPut(entry);
+      $(`edit-${id}`).style.display = 'none';
+      markUnsaved();
+      toast('Entry updated', 'ok');
+    } catch (err) {
+      toast('Save failed: ' + err.message, 'err');
+    } finally {
+      saveBtn.disabled = false; saveBtn.textContent = 'Save';
+    }
+  }
+
+  if (action === 'edit-cancel') {
+    $(`edit-${id}`).style.display = 'none';
+  }
+
+  if (action === 'delete') {
+    if (!confirm('Delete this entry?')) return;
+    await dbDel(id);
+    markUnsaved();
+    await renderEntryList();
+    await updateTabCounts();
+  }
+}
+
+/* ── Env actions (delegated — env entries) ──────────── */
+async function handleEnvAction(e) {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const envActions = ['env-toggle','env-import','env-export','env-delete','var-toggle','var-edit',
+    'var-edit-save','var-edit-cancel','var-copy','var-delete','var-add'];
+  if (!envActions.includes(action)) return;
+  resetLock();
   const envId  = parseInt(btn.dataset.id ?? btn.dataset.envId, 10);
 
   if (action === 'env-toggle') {
@@ -619,7 +777,8 @@ async function handleEnvAction(e) {
     await dbDel(envId);
     envCache.delete(envId);
     markUnsaved();
-    renderEnvList();
+    await renderEntryList();
+    await updateTabCounts();
     return;
   }
   if (action === 'var-toggle') {
@@ -654,7 +813,7 @@ async function handleEnvAction(e) {
       await saveEnvVars(envId, vars);
       markUnsaved();
       toast(`${key} updated`, 'ok');
-      await renderEnvList();
+      await renderEntryList();
       reopenBody(envId);
     } catch (err) {
       toast('Save failed: ' + err.message, 'err');
@@ -684,7 +843,7 @@ async function handleEnvAction(e) {
     delete vars[key];
     await saveEnvVars(envId, vars);
     markUnsaved();
-    await renderEnvList();
+    await renderEntryList();
     reopenBody(envId);
     return;
   }
@@ -699,7 +858,7 @@ async function handleEnvAction(e) {
     keyEl.value = ''; valEl.value = '';
     markUnsaved();
     toast(`${key} saved`, 'ok');
-    await renderEnvList();
+    await renderEntryList();
     reopenBody(envId);
     return;
   }
@@ -717,7 +876,7 @@ async function handleEnvFileInput(e) {
   e.target.value = '';
   markUnsaved();
   toast(`Imported ${count} variable${count !== 1 ? 's' : ''}`, 'ok');
-  await renderEnvList();
+  await renderEntryList();
   reopenBody(envId);
 }
 
@@ -728,19 +887,7 @@ function reopenBody(envId) {
   if (btn)  btn.textContent = '▲';
 }
 
-/* ── New env panel ──────────────────────────────────── */
-function showNewEnvPanel(show) {
-  const p = $('new-env-panel');
-  if (!p) return;
-  p.style.display = show ? '' : 'none';
-  if (show) {
-    newEnvVars = null;
-    $('new-env-name').value = '';
-    updateNewEnvFileLabel();
-    $('new-env-name').focus();
-  }
-}
-
+/* ── New-env import staging (used while adding an entry) ─ */
 function updateNewEnvFileLabel() {
   const lbl   = $('new-env-file-label');
   if (!lbl) return;
@@ -751,22 +898,13 @@ function updateNewEnvFileLabel() {
   lbl.style.color = count ? 'var(--green)' : '';
 }
 
-async function createEnv() {
-  const name = $('new-env-name').value.trim();
-  if (!name) { toast('Environment name is required', 'err'); return; }
-  await addEntry(name, JSON.stringify(newEnvVars || {}), 'env', 'env');
-  markUnsaved();
-  showNewEnvPanel(false);
-  toast(`"${name}" created`, 'ok');
-  renderEnvList();
-}
-
 /* ── Misc UI ────────────────────────────────────────── */
 function markUnsaved() { $('sync-banner').style.display = 'flex'; }
 
 async function exportBackup() {
-  const all = await dbGetAll();
-  const data = { version: VERSION, kdf: CUR_KDF, salt: b64e(SALT), entries: all, ts: Date.now() };
+  const all  = await dbGetAll();
+  const tabs = await tabGetAll();
+  const data = { version: VERSION, kdf: CUR_KDF, salt: b64e(SALT), entries: all, tabs, ts: Date.now() };
   const a   = document.createElement('a');
   a.href    = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type:'application/json' }));
   a.download = `vault_backup_${VERSION}_${new Date().toISOString().slice(0, 10)}.json`;
@@ -809,8 +947,10 @@ async function changePassword() {
 /* ── Wipe ───────────────────────────────────────────── */
 async function wipeVault() {
   if (!confirm('Permanently delete ALL vault data? This cannot be undone.')) return;
-  await dbClear(); await metaClr();
+  await dbClear(); await metaClr(); await tabsClear();
   CK = null; SALT = null; CUR_KDF = KDF_PBKDF2; envCache.clear(); stopLock();
+  curTabId = null; TABS = [];
+  $('custom-tabs-list').innerHTML = '';
   $('vault-view').style.display   = 'none';
   $('auth-view').style.display    = '';
   $('sidebar-meta').style.display = 'none';
@@ -854,7 +994,7 @@ async function init() {
       await metaPut('salt', b64e(s));
       await metaPut('kdf',  KDF_PBKDF2);
       $('new-key').value = ''; $('new-confirm').value = '';
-      unlockUI();
+      await unlockUI();
     } catch (err) { toast('Failed: ' + err.message, 'err'); }
     finally { btn.disabled = false; btn.textContent = 'Initialize encrypted storage'; }
   });
@@ -881,7 +1021,7 @@ async function init() {
         );
       }
       CK = k; SALT = s; CUR_KDF = kdf;
-      unlockUI();
+      await unlockUI();
       // Background migrate if Argon2 — migrateToPbkdf2 updates CUR_KDF when done
       if (kdf === KDF_ARGON2) migrateToPbkdf2(key);
     } catch (err) {
@@ -926,9 +1066,25 @@ async function init() {
           { name:'AES-GCM', iv: b64d(e0.encrypted.iv) }, k, b64d(e0.encrypted.ct)
         );
       }
-      // Write entries
+      // Write tabs first (remapping ids so entry.tabId stays consistent),
+      // then entries — this also handles legacy backups with no tabs array.
       await dbClear();
-      for (const e of (pendingBackup.entries || [])) { const { id, ...rest } = e; await dbAdd(rest); }
+      await tabsClear();
+      const hasTabs = Array.isArray(pendingBackup.tabs) && pendingBackup.tabs.length;
+      let tabIdMap = {};
+      if (hasTabs) {
+        for (const t of pendingBackup.tabs) {
+          const { id: oldId, ...rest } = t;
+          const newId = await tabAdd(rest);
+          tabIdMap[oldId] = newId;
+        }
+      }
+      for (const e of (pendingBackup.entries || [])) {
+        const { id, tabId, ...rest } = e;
+        await dbAdd({ ...rest, tabId: hasTabs ? tabIdMap[tabId] : undefined });
+      }
+      if (!hasTabs) await ensureTabsReady(); // legacy backup: recreate categories & backfill by type
+
       await metaPut('salt', pendingBackup.salt);
       await metaPut('kdf',  backupKdf);
       CK = k; SALT = s; CUR_KDF = backupKdf;
@@ -951,7 +1107,7 @@ async function init() {
 
       $('restore-key').value = '';
       markUnsaved();
-      unlockUI();
+      await unlockUI();
     } catch (err) {
       const msg = err.message?.includes('Argon2') || err.message?.includes('argon2')
         ? err.message : 'Wrong key or corrupt backup';
@@ -959,8 +1115,25 @@ async function init() {
     } finally { btn.disabled = false; btn.textContent = 'Restore & decrypt'; }
   });
 
-  document.querySelectorAll('#main-tabs .tab').forEach(t =>
-    t.addEventListener('click', () => switchTab(t.dataset.tab))
+  /* Tab bar: switch / rename (double-click) / delete (× on hover) / add */
+  $('main-tabs').addEventListener('click', e => {
+    const closeBtn = e.target.closest('[data-action="delete-tab"]');
+    if (closeBtn) { e.stopPropagation(); deleteTabById(parseInt(closeBtn.dataset.tabId, 10)); return; }
+    if (e.target.closest('#tab-security')) { switchTab('security'); return; }
+    const tabEl = e.target.closest('.tab-custom');
+    if (tabEl) switchTab(parseInt(tabEl.dataset.tabId, 10));
+  });
+  $('main-tabs').addEventListener('dblclick', e => {
+    const labelEl = e.target.closest('.tab-label');
+    if (!labelEl) return;
+    const tabEl = labelEl.closest('.tab-custom');
+    if (tabEl) renameTab(parseInt(tabEl.dataset.tabId, 10));
+  });
+  $('add-tab-btn').addEventListener('click', addTab);
+
+  /* Add-entry type selector */
+  document.querySelectorAll('.type-btn').forEach(b =>
+    b.addEventListener('click', () => setAddType(b.dataset.type))
   );
 
   document.addEventListener('click', e => {
@@ -975,23 +1148,29 @@ async function init() {
     btn.textContent = inp.type === 'password' ? '👁' : '🙈';
   });
 
-  $('list-container').addEventListener('click', handleEntryAction);
-  $('env-list-container').addEventListener('click', handleEnvAction);
+  $('list-container').addEventListener('click', e => { handleEntryAction(e); handleEnvAction(e); });
 
   $('add-btn').addEventListener('click', async () => {
-    const name    = $('n-name').value.trim();
-    const content = $('n-content').value.trim();
-    const tag     = $('n-tag').value.trim();
-    if (!name || !content) { toast('Name and content are required', 'err'); return; }
-    const type = { passwords:'pw', keys:'key', certs:'cert' }[curTab] || 'pw';
-    await addEntry(name, content, tag, type);
-    $('n-name').value = ''; $('n-content').value = ''; $('n-tag').value = '';
+    if (curTabId === 'security' || curTabId == null) return;
+    const name = $('n-name').value.trim();
+    const tag  = $('n-tag').value.trim();
+    if (!name) { toast('Title is required', 'err'); return; }
+
+    if (curAddType === 'env') {
+      await addEntry(name, JSON.stringify(newEnvVars || {}), tag, 'env', curTabId);
+    } else {
+      const content = $('n-content').value.trim();
+      if (!content) { toast('Content is required', 'err'); return; }
+      await addEntry(name, content, tag, curAddType, curTabId);
+    }
+    resetAddForm();
     markUnsaved();
-    renderEntryList();
+    await renderEntryList();
+    await updateTabCounts();
+    toast('Entry saved', 'ok');
   });
 
   $('v-search').addEventListener('input', renderEntryList);
-  $('env-search').addEventListener('input', renderEnvList);
 
   $('content-zone').addEventListener('click', () => $('content-uploader').click());
   $('content-uploader').addEventListener('change', e => {
@@ -1005,9 +1184,6 @@ async function init() {
     r.readAsText(f);
   });
 
-  $('new-env-btn').addEventListener('click', () => showNewEnvPanel(true));
-  $('cancel-env-btn').addEventListener('click', () => showNewEnvPanel(false));
-  $('create-env-btn').addEventListener('click', createEnv);
   $('new-env-import-zone').addEventListener('click', () => $('new-env-file-input').click());
   $('new-env-file-input').addEventListener('change', async e => {
     const f = e.target.files[0];
@@ -1026,7 +1202,6 @@ async function init() {
 
   $('unlock-key').addEventListener('keydown',   e => { if (e.key === 'Enter') $('unlock-btn').click(); });
   $('new-confirm').addEventListener('keydown',  e => { if (e.key === 'Enter') $('create-btn').click(); });
-  $('new-env-name').addEventListener('keydown', e => { if (e.key === 'Enter') $('create-env-btn').click(); });
 }
 
 document.addEventListener('DOMContentLoaded', init);
