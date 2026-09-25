@@ -44,8 +44,6 @@
     and wasm-unsafe-eval from script-src and serve the vault entirely offline.
     -->
 
-    <script defer src="https://umami-livid-five.vercel.app/script.js" data-website-id="14be9be0-7828-417d-aaf0-430986701710"></script>
-    
     <!-- All application logic — loaded from same origin ('self') -->
     <script src="vault.js" defer></script>
 
@@ -54,32 +52,43 @@
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
         :root {
-            --bg:             #080c16;
-            --bg2:            #0c1120;
-            --surface:        #111827;
-            --surface2:       #182035;
-            --surface3:       #1e2a42;
-            --border:         rgba(99,110,230,0.16);
-            --border-hover:   rgba(99,110,230,0.35);
-            --border-focus:   rgba(99,110,230,0.6);
+            --bg:             #f3f1fb;
+            --bg2:            #ffffff;
+            --surface:        #ffffff;
+            --surface2:       #f5f6fb;
+            --surface3:       #ececf5;
+            --border:         #e6e5f2;
+            --border-hover:   #cfcfe8;
+            --border-focus:   rgba(99,102,241,0.5);
             --accent:         #6366f1;
-            --accent-dim:     rgba(99,102,241,0.12);
-            --accent-glow:    rgba(99,102,241,0.22);
-            --accent-bright:  #818cf8;
-            --text:           #e2e8f0;
-            --text2:          #94a3b8;
-            --text3:          #4b5680;
-            --green:          #34d399;
-            --green-dim:      rgba(52,211,153,0.12);
-            --amber:          #fbbf24;
-            --amber-dim:      rgba(251,191,36,0.12);
-            --red:            #f87171;
-            --red-dim:        rgba(248,113,113,0.12);
-            --purple:         #a78bfa;
+            --accent-dim:     rgba(99,102,241,0.1);
+            --accent-glow:    rgba(99,102,241,0.18);
+            --accent-bright:  #4f46e5;
+            --text:           #1c2033;
+            --text2:          #666c85;
+            --text3:          #9297ad;
+            --green:          #16a879;
+            --green-dim:      rgba(22,168,121,0.1);
+            --amber:          #c98a12;
+            --amber-dim:      rgba(217,158,21,0.1);
+            --red:            #e14a4a;
+            --red-dim:        rgba(225,74,74,0.1);
+            --purple:         #8b5cf6;
+            --cyan:           #0891b2;
             --mono:           'Consolas', 'Menlo', 'Monaco', 'Courier New', monospace;
             --sans:           -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
             --radius:         10px;
             --radius-lg:      16px;
+
+            /* Sidebar keeps a dark navy scheme against the light page */
+            --sb-bg:          #141b30;
+            --sb-bg2:         #1c2540;
+            --sb-border:      rgba(255,255,255,0.08);
+            --sb-text:        #eef0fa;
+            --sb-text2:       #9aa1c4;
+            --sb-text3:       #6b7398;
+            --sb-active-bg:   rgba(99,102,241,0.28);
+            --sb-active-text: #b6bdfb;
         }
 
         body {
@@ -88,8 +97,11 @@
             color: var(--text);
             min-height: 100vh;
             display: flex;
-            background-image: radial-gradient(circle, rgba(99,110,230,0.07) 1px, transparent 1px);
-            background-size: 28px 28px;
+            background-image:
+                radial-gradient(circle at 15% 0%, rgba(244,114,182,0.14) 0%, transparent 45%),
+                radial-gradient(circle at 100% 20%, rgba(99,102,241,0.10) 0%, transparent 45%),
+                radial-gradient(circle, rgba(99,110,230,0.05) 1px, transparent 1px);
+            background-size: auto, auto, 28px 28px;
         }
 
         /* ── Sync banner ───────────────────────────────────────────────────── */
@@ -113,12 +125,12 @@
             gap: 8px;
         }
 
-        /* ── Sidebar ───────────────────────────────────────────────────────── */
+        /* ── Sidebar (dark navy, matches the reference template) ─────────────── */
         .sidebar {
-            flex: 0 0 268px;
-            background-color: var(--bg2);
-            border-right: 1px solid var(--border);
-            padding: 28px 24px;
+            flex: 0 0 264px;
+            background-color: var(--sb-bg);
+            color: var(--sb-text);
+            padding: 24px 18px;
             height: 100vh;
             position: sticky;
             top: 0;
@@ -133,35 +145,36 @@
             align-items: center;
             gap: 12px;
             margin-bottom: 0;
+            padding: 0 6px;
         }
 
         .logo-icon {
-            width: 38px;
-            height: 38px;
-            background: var(--accent-dim);
-            border: 1px solid var(--border-hover);
+            width: 36px;
+            height: 36px;
+            background: var(--accent);
+            border: none;
             border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.1rem;
+            font-size: 1.05rem;
         }
 
         .logo-text {
-            font-size: 1.5rem;
+            font-size: 1.4rem;
             font-weight: 700;
             letter-spacing: -0.02em;
-            color: var(--text);
+            color: var(--sb-text);
         }
 
         .version-tag {
             font-family: var(--mono);
-            font-size: 0.72rem;
-            color: var(--text3);
-            background: var(--surface);
+            font-size: 0.7rem;
+            color: var(--sb-text2);
+            background: var(--sb-bg2);
             padding: 6px 12px;
             border-radius: 6px;
-            border: 1px solid var(--border);
+            border: 1px solid var(--sb-border);
             letter-spacing: 0.05em;
             display: block;
             width: 100%;
@@ -171,16 +184,124 @@
 
         .sidebar-divider {
             height: 1px;
-            background: var(--border);
-            margin: 20px 0;
+            background: var(--sb-border);
+            margin: 16px 0;
         }
 
-        #sidebar-meta { display: none; }
+        /* ── Sidebar nav (tabs live here now) ─────────────────────────────────── */
+        .sidebar-nav-section { padding: 0 2px; }
+        .sidebar-nav-section + .sidebar-nav-section { margin-top: 18px; }
+
+        .sidebar-nav-title {
+            font-size: 0.65rem;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--sb-text3);
+            padding: 0 10px;
+            margin-bottom: 8px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            color: var(--sb-text2);
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: background 0.15s, color 0.15s;
+            user-select: none;
+        }
+
+        .nav-item:hover { background: rgba(255,255,255,0.05); color: var(--sb-text); }
+
+        .nav-item.active {
+            background: var(--sb-active-bg);
+            color: var(--sb-active-text);
+        }
+
+        .nav-item.nav-item-danger:hover { color: #ff9d9d; }
+        .nav-item.nav-item-danger.active { background: rgba(225,74,74,0.16); color: #ff9d9d; }
+
+        .nav-icon {
+            flex-shrink: 0;
+            width: 22px;
+            height: 22px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.62rem;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: 0.01em;
+        }
+
+        .nav-item-danger .nav-icon { background: var(--sb-bg2); font-size: 0.85rem; }
+
+        .nav-label {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .nav-count {
+            font-size: 0.65rem;
+            font-weight: 700;
+            background: rgba(255,255,255,0.08);
+            color: var(--sb-text2);
+            border-radius: 8px;
+            padding: 1px 6px;
+            min-width: 16px;
+            text-align: center;
+        }
+
+        .nav-item.active .nav-count { background: rgba(99,102,241,0.35); color: var(--sb-active-text); }
+
+        .nav-close {
+            flex-shrink: 0;
+            opacity: 0;
+            transition: opacity 0.15s, color 0.15s;
+            color: var(--sb-text3);
+            font-size: 0.95rem;
+            line-height: 1;
+        }
+
+        .nav-item:hover .nav-close { opacity: 1; }
+        .nav-close:hover { color: #ff9d9d; }
+
+        .nav-add-btn {
+            width: 100%;
+            margin-top: 4px;
+            background: transparent;
+            border: 1px dashed var(--sb-border);
+            color: var(--sb-text3);
+            padding: 8px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-align: left;
+            transition: color 0.15s, border-color 0.15s, background 0.15s;
+        }
+
+        .nav-add-btn:hover { color: var(--sb-active-text); border-color: var(--accent); background: rgba(99,102,241,0.1); }
+
+        #sidebar-meta { display: none; padding: 0 2px; }
+
+        /* Belt-and-braces lock gate: nothing tagged .locked-hidden may be
+           shown while the vault is locked, under any breakpoint or state. */
+        .locked-hidden { display: none !important; }
 
         .meta-block {
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            gap: 18px;
         }
 
         .meta-label {
@@ -188,7 +309,7 @@
             font-weight: 700;
             letter-spacing: 0.12em;
             text-transform: uppercase;
-            color: var(--text3);
+            color: var(--sb-text3);
             margin-bottom: 8px;
         }
 
@@ -210,26 +331,26 @@
 
         .status-text {
             font-size: 0.8rem;
-            color: var(--green);
+            color: #4ade9b;
             font-weight: 600;
         }
 
         .meta-item {
             font-size: 0.78rem;
-            color: var(--text2);
+            color: var(--sb-text2);
         }
 
-        /* 2×2 grid now that we have 4 categories */
+        /* 3-column grid — 5 categories now that Files exist */
         .category-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(3, 1fr);
             gap: 8px;
             margin-top: 4px;
         }
 
         .category-pill {
-            background: var(--surface);
-            border: 1px solid var(--border);
+            background: var(--sb-bg2);
+            border: 1px solid var(--sb-border);
             border-radius: 8px;
             padding: 10px 4px;
             text-align: center;
@@ -239,14 +360,14 @@
             font-family: var(--mono);
             font-size: 1.1rem;
             font-weight: 700;
-            color: var(--accent-bright);
+            color: var(--sb-active-text);
             display: block;
             line-height: 1.2;
         }
 
         .category-pill-name {
             font-size: 0.6rem;
-            color: var(--text3);
+            color: var(--sb-text3);
             text-transform: uppercase;
             letter-spacing: 0.08em;
             margin-top: 2px;
@@ -254,8 +375,8 @@
         }
 
         .lock-timer-block {
-            background: var(--surface);
-            border: 1px solid var(--border);
+            background: var(--sb-bg2);
+            border: 1px solid var(--sb-border);
             border-radius: var(--radius);
             padding: 11px 14px;
         }
@@ -268,7 +389,7 @@
 
         .lock-timer-label {
             font-size: 0.65rem;
-            color: var(--text3);
+            color: var(--sb-text3);
             text-transform: uppercase;
             letter-spacing: 0.12em;
             font-weight: 700;
@@ -277,25 +398,25 @@
         #lock-countdown {
             font-family: var(--mono);
             font-size: 1rem;
-            color: var(--amber);
+            color: #f5c563;
             font-weight: 700;
             letter-spacing: 0.04em;
         }
 
         .sidebar-footer {
             margin-top: auto;
-            padding-top: 20px;
-            border-top: 1px solid var(--border);
+            padding-top: 18px;
+            border-top: 1px solid var(--sb-border);
         }
 
         .security-notice {
             font-size: 0.7rem;
-            color: var(--text3);
+            color: var(--sb-text3);
             line-height: 1.5;
         }
 
         .security-notice strong {
-            color: var(--text2);
+            color: var(--sb-text2);
         }
 
         /* ── Main content ──────────────────────────────────────────────────── */
@@ -304,7 +425,7 @@
             display: flex;
             justify-content: center;
             align-items: flex-start;
-            padding: 60px 20px;
+            padding: 44px 28px;
             overflow-y: auto;
         }
 
@@ -316,12 +437,16 @@
             border: 1px solid var(--border);
             border-radius: var(--radius-lg);
             overflow: hidden;
-            box-shadow: 0 0 0 1px rgba(99,110,230,0.05), 0 24px 60px rgba(0,0,0,0.4);
+            box-shadow: 0 1px 2px rgba(30,20,60,0.04), 0 20px 50px rgba(30,20,60,0.08);
         }
 
+        /* The dashboard (post-unlock) view gets the wide, card-grid layout;
+           the auth card stays a narrow, centered login-style panel. */
+        #vault-view.card { max-width: 1180px; }
+
         .card-header {
-            padding: 20px 28px 0;
-            background: linear-gradient(180deg, var(--surface2) 0%, var(--surface) 100%);
+            padding: 22px 28px;
+            background: var(--surface);
             border-bottom: 1px solid var(--border);
         }
 
@@ -332,6 +457,99 @@
             text-transform: uppercase;
             color: var(--text3);
             margin-bottom: 16px;
+        }
+
+        /* Topbar inside #vault-view's card-header: title + add/search/view controls */
+        .topbar-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .topbar-title {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: -0.01em;
+        }
+
+        .topbar-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn-pill-add {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            padding: 9px 18px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.82rem;
+            cursor: pointer;
+            box-shadow: 0 2px 10px rgba(99,102,241,0.28);
+            transition: opacity 0.15s, box-shadow 0.15s;
+        }
+
+        .btn-pill-add:hover { box-shadow: 0 4px 16px rgba(99,102,241,0.4); }
+        .btn-pill-add.btn-pill-cancel { background: var(--surface2); color: var(--text2); box-shadow: none; border: 1px solid var(--border); }
+
+        .search-wrap { position: relative; }
+
+        .search-wrap input {
+            width: 220px;
+            padding: 8px 14px 8px 32px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 0.83rem;
+            color: var(--text);
+            outline: none;
+            transition: border-color 0.15s, background 0.15s, width 0.15s;
+        }
+
+        .search-wrap input:focus { background: var(--bg2); border-color: var(--border-focus); width: 260px; }
+        .search-wrap::before {
+            content: '🔍';
+            position: absolute;
+            left: 11px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 0.72rem;
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        .view-toggle {
+            display: flex;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .view-btn {
+            background: var(--surface2);
+            border: none;
+            color: var(--text3);
+            padding: 7px 11px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            line-height: 1;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .view-btn + .view-btn { border-left: 1px solid var(--border); }
+        .view-btn:hover { color: var(--text2); }
+        .view-btn.active { background: var(--accent-dim); color: var(--accent-bright); }
+
+        .topbar-count {
+            margin-top: 12px;
+            font-size: 0.78rem;
+            color: var(--text3);
         }
 
         .card-body {
@@ -458,6 +676,20 @@
             border-color: var(--accent);
             color: var(--accent-bright);
         }
+
+        /* ── Add-entry panel (toggled by the "+ Add" button) ─────────────────── */
+        .add-entry-panel {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 18px;
+            margin-bottom: 18px;
+            animation: fadeIn 0.15s ease;
+        }
+
+        .add-entry-actions { display: flex; gap: 8px; }
+        .add-entry-actions .btn-primary { flex: 1; width: auto; }
+        .add-entry-actions .btn-ghost { width: auto; padding: 12px 18px; }
 
         /* ── Type badge on mixed entry rows ──────────────────────────────────── */
         .type-badge {
@@ -671,19 +903,71 @@
 
         #file-label.staged { color: var(--green); }
 
-        /* ── Entry list ────────────────────────────────────────────────────── */
-        #list-container { margin-top: 18px; }
+        /* ── Entry list — responsive card grid ───────────────────────────────── */
+        #list-container { margin-top: 4px; }
 
-        .entry-item {
-            background: var(--bg2);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 14px 16px;
-            margin-bottom: 8px;
-            transition: border-color 0.15s;
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 14px;
         }
 
-        .entry-item:hover { border-color: var(--border-hover); }
+        .cards-list { grid-template-columns: 1fr; }
+
+        .entry-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        .entry-card:hover { border-color: var(--border-hover); box-shadow: 0 6px 18px rgba(30,20,60,0.06); }
+
+        .entry-card-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-weight: 700;
+            font-size: 0.76rem;
+            flex-shrink: 0;
+            letter-spacing: 0.01em;
+        }
+
+        .avatar-sm { width: 28px; height: 28px; border-radius: 7px; font-size: 0.66rem; }
+
+        .entry-card-name {
+            font-weight: 600;
+            font-size: 0.88rem;
+            color: var(--text);
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .entry-card-sub {
+            font-size: 0.72rem;
+            color: var(--text3);
+            font-family: var(--mono);
+            margin-top: 3px;
+            margin-bottom: 12px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
 
         .entry-row {
             display: flex;
@@ -711,9 +995,10 @@
             font-family: var(--mono);
         }
 
-        .entry-actions {
+        .entry-actions, .entry-card-actions {
             display: flex;
             gap: 5px;
+            flex-wrap: wrap;
             flex-shrink: 0;
         }
 
@@ -820,9 +1105,6 @@
             font-size: 0.83rem;
         }
 
-        /* ── Search ────────────────────────────────────────────────────────── */
-        #v-search { margin-bottom: 16px; }
-
         /* ── Card footer ───────────────────────────────────────────────────── */
         .card-footer {
             padding: 16px 28px;
@@ -886,10 +1168,11 @@
         .new-env-panel .input-group { margin-bottom: 12px; }
 
         .env-item {
-            background: var(--bg2);
+            grid-column: 1 / -1;
+            background: var(--surface);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            margin-bottom: 8px;
+            margin-bottom: 0;
             overflow: hidden;
             transition: border-color 0.15s;
         }
@@ -1022,7 +1305,25 @@
 
         /* ── Responsive ────────────────────────────────────────────────────── */
         @media (max-width: 720px) {
-            .sidebar { display: none; }
+            body { flex-direction: column; }
+            .sidebar {
+                width: 100%;
+                height: auto;
+                position: relative;
+                flex-direction: row;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                align-items: center;
+                padding: 10px 14px;
+                gap: 14px;
+            }
+            .sidebar-logo { flex-shrink: 0; }
+            .version-tag, .sidebar-divider, #sidebar-meta, .sidebar-footer { display: none; }
+            #sidebar-nav-wrap { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+            .sidebar-nav-section { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-top: 0 !important; }
+            .sidebar-nav-title { display: none; }
+            #sidebar-tab-nav { display: flex; gap: 6px; }
+            .nav-add-btn { width: auto; white-space: nowrap; }
             .content-area { padding: 20px 14px; }
             .card-body { padding: 18px; }
             .card-footer { padding: 14px 18px; }
@@ -1045,6 +1346,30 @@
     </div>
     <span id="app-version" class="version-tag">loading…</span>
 
+    <div class="sidebar-divider locked-hidden" id="sidebar-nav-divider"></div>
+
+    <!-- Hidden until unlockUI() reveals it — nothing here may render before
+         the vault is actually unlocked, since tab names and counts are
+         read straight out of IndexedDB with no decryption required.
+         .locked-hidden is `display:none !important` so no other rule
+         (including the mobile media query below) can override it. -->
+    <div id="sidebar-nav-wrap" class="locked-hidden">
+        <!-- Tabs — user-created, each holding a mixed list of secrets -->
+        <div class="sidebar-nav-section">
+            <div class="sidebar-nav-title">Tabs</div>
+            <div id="sidebar-tab-nav"><!-- rendered by JS: one .nav-item.tab-custom per tab --></div>
+            <button type="button" id="add-tab-btn" class="nav-add-btn">+ New tab</button>
+        </div>
+
+        <div class="sidebar-nav-section">
+            <div class="sidebar-nav-title">Vault</div>
+            <div class="nav-item nav-item-danger" id="tab-security" data-tab="security">
+                <span class="nav-icon">⚙</span>
+                <span class="nav-label">Security</span>
+            </div>
+        </div>
+    </div>
+
     <div class="sidebar-divider"></div>
 
     <div id="sidebar-meta">
@@ -1058,7 +1383,7 @@
                 </div>
             </div>
 
-            <!-- Per-category counts — 2×2 grid -->
+            <!-- Per-category counts — 3-column grid (global, across every tab) -->
             <div>
                 <div class="meta-label">Contents</div>
                 <div class="category-grid">
@@ -1078,6 +1403,10 @@
                         <span id="count-env" class="category-pill-count">0</span>
                         <span class="category-pill-name">Envs</span>
                     </div>
+                    <div class="category-pill">
+                        <span id="count-file" class="category-pill-count">0</span>
+                        <span class="category-pill-name">Files</span>
+                    </div>
                 </div>
             </div>
 
@@ -1092,8 +1421,8 @@
                 </div>
             </div>
 
-            <div id="last-update" class="meta-item" style="display:none;font-size:.75rem;color:var(--text3)"></div>
-            <div id="entry-count" class="meta-item" style="display:none;font-size:.72rem;color:var(--text3)"></div>
+            <div id="last-update" class="meta-item" style="display:none;font-size:.75rem"></div>
+            <div id="entry-count" class="meta-item" style="display:none;font-size:.72rem"></div>
         </div>
     </div>
 
@@ -1125,7 +1454,7 @@
                 <div class="input-group">
                     <label for="unlock-key">Master key</label>
                     <div class="input-with-toggle">
-                        <input type="password" id="unlock-key" autocomplete="current-password"
+                        <input type="password" id="unlock-key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true"
                                placeholder="Enter your master key">
                         <button class="toggle-btn" data-target="unlock-key" aria-label="Toggle visibility">👁</button>
                     </div>
@@ -1138,7 +1467,7 @@
                 <div class="input-group">
                     <label for="new-key">Create master key <span style="color:var(--text3); font-weight:400; text-transform:none; letter-spacing:0">(min. 10 chars)</span></label>
                     <div class="input-with-toggle">
-                        <input type="password" id="new-key" autocomplete="new-password"
+                        <input type="password" id="new-key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true"
                                placeholder="Choose a strong master key">
                         <button class="toggle-btn" data-target="new-key" aria-label="Toggle visibility">👁</button>
                     </div>
@@ -1146,7 +1475,7 @@
                 <div class="input-group">
                     <label for="new-confirm">Confirm master key</label>
                     <div class="input-with-toggle">
-                        <input type="password" id="new-confirm" autocomplete="new-password"
+                        <input type="password" id="new-confirm" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true"
                                placeholder="Re-enter master key">
                         <button class="toggle-btn" data-target="new-confirm" aria-label="Toggle visibility">👁</button>
                     </div>
@@ -1163,7 +1492,7 @@
                 <div class="input-group">
                     <label for="restore-key">Master key for this backup</label>
                     <div class="input-with-toggle">
-                        <input type="password" id="restore-key" autocomplete="current-password"
+                        <input type="password" id="restore-key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true"
                                placeholder="Enter the backup's master key">
                         <button class="toggle-btn" data-target="restore-key" aria-label="Toggle visibility">👁</button>
                     </div>
@@ -1176,57 +1505,77 @@
     <!-- Vault view ─────────────────────────────────────────────────────────── -->
     <div id="vault-view" class="card" style="display:none">
         <div class="card-header">
-            <div class="card-header-title">Encrypted storage</div>
-            <div class="tabs-row" id="main-tabs">
-                <div class="tabs" id="custom-tabs-list"><!-- user tabs rendered here --></div>
-                <div class="tabs-pinned">
-                    <button type="button" class="tab-add" id="add-tab-btn" title="Add tab">+</button>
-                    <div class="tab tab-danger" id="tab-security" data-tab="security">Security</div>
+            <div class="topbar-row">
+                <div class="topbar-title" id="current-tab-title">Vault</div>
+                <div class="topbar-controls" id="topbar-controls">
+                    <button type="button" id="add-entry-btn" class="btn-pill-add">+ Add</button>
+                    <div class="search-wrap">
+                        <input type="text" id="v-search" placeholder="Search by title or tag…" autocomplete="off">
+                    </div>
+                    <div class="view-toggle">
+                        <button type="button" id="view-grid-btn" class="view-btn active" title="Grid view">▦</button>
+                        <button type="button" id="view-list-btn" class="view-btn" title="List view">☰</button>
+                    </div>
                 </div>
             </div>
+            <div class="topbar-count" id="list-meta"></div>
         </div>
 
         <div class="card-body">
 
             <!-- Tab content: a mixed list of passwords / keys / certs / envs -->
             <div id="vault-content-section">
-                <input type="text" id="v-search" placeholder="Search by title or tag…">
 
-                <!-- Secret type selector -->
-                <div class="type-select" id="type-select">
-                    <button type="button" class="type-btn active" data-type="pw">🔑 Password</button>
-                    <button type="button" class="type-btn" data-type="key">🗝 Key</button>
-                    <button type="button" class="type-btn" data-type="cert">📜 Cert</button>
-                    <button type="button" class="type-btn" data-type="env">🧩 Env</button>
-                </div>
+                <!-- Add entry panel — toggled open by the "+ Add" button -->
+                <div id="add-entry-panel" class="add-entry-panel" style="display:none">
+                    <!-- Secret type selector -->
+                    <div class="type-select" id="type-select">
+                        <button type="button" class="type-btn active" data-type="pw">🔑 Password</button>
+                        <button type="button" class="type-btn" data-type="key">🗝 Key</button>
+                        <button type="button" class="type-btn" data-type="cert">📜 Cert</button>
+                        <button type="button" class="type-btn" data-type="env">🧩 Env</button>
+                        <button type="button" class="type-btn" data-type="file">📎 File</button>
+                    </div>
 
-                <!-- File importer (keys + certs only) -->
-                <div id="importer-ui" style="display:none">
-                    <div class="upload-zone" id="content-zone" role="button" aria-label="Import file">
-                        <strong>Drop or click to import file content</strong>
-                        <input type="file" id="content-uploader" style="display:none">
+                    <!-- File importer (keys + certs only) — extracts text content -->
+                    <div id="importer-ui" style="display:none">
+                        <div class="upload-zone" id="content-zone" role="button" aria-label="Import file">
+                            <strong>Drop or click to import file content</strong>
+                            <input type="file" id="content-uploader" style="display:none">
+                        </div>
+                    </div>
+
+                    <!-- .env importer (env only) -->
+                    <div id="env-importer-ui" style="display:none">
+                        <div class="upload-zone" id="new-env-import-zone"
+                             role="button" aria-label="Import .env file">
+                            <span id="new-env-file-label">Click or drop a .env file to pre-populate (optional)</span>
+                            <input type="file" id="new-env-file-input"
+                                   style="display:none" accept=".env,text/plain">
+                        </div>
+                    </div>
+
+                    <!-- Attachment upload (file only) — the whole file is encrypted, not just extracted text -->
+                    <div id="attachment-upload-ui" style="display:none">
+                        <div class="upload-zone" id="attachment-upload-zone"
+                             role="button" aria-label="Upload file to encrypt">
+                            <span id="attachment-file-label">Click or drop a file to encrypt</span>
+                            <input type="file" id="attachment-file-input" style="display:none">
+                        </div>
+                    </div>
+
+                    <div class="two-col" style="margin-bottom:10px">
+                        <input type="text" id="n-name" placeholder="Title / alias" autocomplete="off">
+                        <input type="text" id="n-tag"  placeholder="Tag (optional)" autocomplete="off">
+                    </div>
+                    <textarea id="n-content" placeholder="Paste secret content here…" style="margin-bottom:10px"></textarea>
+                    <div class="add-entry-actions">
+                        <button id="add-btn" class="btn btn-primary">Encrypt &amp; save entry</button>
+                        <button type="button" id="cancel-add-btn" class="btn btn-ghost">Cancel</button>
                     </div>
                 </div>
 
-                <!-- .env importer (env only) -->
-                <div id="env-importer-ui" style="display:none">
-                    <div class="upload-zone" id="new-env-import-zone"
-                         role="button" aria-label="Import .env file">
-                        <span id="new-env-file-label">Click or drop a .env file to pre-populate (optional)</span>
-                        <input type="file" id="new-env-file-input"
-                               style="display:none" accept=".env,text/plain">
-                    </div>
-                </div>
-
-                <!-- Add entry form -->
-                <div class="two-col" style="margin-bottom:10px">
-                    <input type="text" id="n-name" placeholder="Title / alias">
-                    <input type="text" id="n-tag"  placeholder="Tag (optional)">
-                </div>
-                <textarea id="n-content" placeholder="Paste secret content here…" style="margin-bottom:10px"></textarea>
-                <button id="add-btn" class="btn btn-primary">Encrypt &amp; save entry</button>
-
-                <div id="list-container"></div>
+                <div id="list-container" class="cards-grid"></div>
             </div>
 
             <!-- Security section -->
@@ -1235,14 +1584,14 @@
                 <div class="input-group">
                     <label for="change-pass-new">New master key <span style="color:var(--text3); font-weight:400; text-transform:none; letter-spacing:0">(min. 10 chars)</span></label>
                     <div class="input-with-toggle">
-                        <input type="password" id="change-pass-new" autocomplete="new-password">
+                        <input type="password" id="change-pass-new" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">
                         <button class="toggle-btn" data-target="change-pass-new" aria-label="Toggle visibility">👁</button>
                     </div>
                 </div>
                 <div class="input-group">
                     <label for="change-pass-confirm">Confirm new key</label>
                     <div class="input-with-toggle">
-                        <input type="password" id="change-pass-confirm" autocomplete="new-password">
+                        <input type="password" id="change-pass-confirm" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">
                         <button class="toggle-btn" data-target="change-pass-confirm" aria-label="Toggle visibility">👁</button>
                     </div>
                 </div>
