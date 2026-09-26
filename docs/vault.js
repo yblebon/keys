@@ -19,6 +19,12 @@ const STORE_TABS  = 'tabs';
 const LOCK_MS     = 5 * 60 * 1000;
 const KDF_PBKDF2  = 'pbkdf2';
 const KDF_ARGON2  = 'argon2id';
+// PBKDF2 iteration count is stored per-vault (meta key 'iterations') so it can
+// be raised over time without breaking vaults/backups created before the
+// change. A vault/backup with no stored count predates this field entirely —
+// it was always derived at PBKDF2_ITERATIONS_LEGACY, so that's the fallback.
+const PBKDF2_ITERATIONS_LEGACY  = 600_000;
+const PBKDF2_ITERATIONS_CURRENT = 1_200_000;
 // CDN URL for Argon2 — only injected when an old backup/vault needs it
 const ARGON2_CDN = 'https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js';
 // SRI hash for the above file, computed from argon2-browser@1.18.0's
@@ -62,6 +68,7 @@ function avatarInitials(name) {
 let CK            = null;
 let SALT          = null;
 let CUR_KDF       = KDF_PBKDF2; // always in sync with CK/SALT
+let CUR_ITER      = PBKDF2_ITERATIONS_CURRENT; // PBKDF2 iteration count in effect for CK (meaningless when CUR_KDF is argon2id)
 let DB            = null;
 let lockTimer     = null;
 let lockEnd       = 0;
@@ -120,15 +127,28 @@ if (lockChannel) {
 }
 
 /* ── Failed-attempt backoff (unlock / restore) ────────
-   PBKDF2 at 600k iterations already costs ~100-300ms per guess, but this
+   PBKDF2 at 600k+ iterations already costs real time per guess, but this
    adds an explicit, visible lockout on top so a script or rogue extension
-   can't just hammer the unlock/restore flow. State is in-memory only —
-   it resets on page reload, same as everything else here — this is a
-   speed-bump against automated guessing, not a durable account lockout. */
+   can't just hammer the unlock/restore flow. State is persisted to the
+   (unencrypted) IndexedDB 'meta' store — reachable before unlock, same as
+   'salt'/'kdf' — so it survives a page reload instead of resetting it;
+   this is still an in-browser speed-bump, not a durable server-side
+   lockout, but it can no longer be defeated by simply reloading the page. */
 const FREE_ATTEMPTS    = 2;      // first couple of typos cost nothing
 const BASE_DELAY_MS    = 1000;
 const MAX_DELAY_MS     = 30000;
 const attemptState = { unlock: { count: 0, lockUntil: 0 }, restore: { count: 0, lockUntil: 0 } };
+
+async function loadAttemptState() {
+  for (const key of Object.keys(attemptState)) {
+    const saved = await metaGet(`attempts_${key}`);
+    if (saved && typeof saved.count === 'number') attemptState[key] = saved;
+  }
+}
+
+function persistAttemptState(key) {
+  metaPut(`attempts_${key}`, attemptState[key]).catch(() => {});
+}
 
 function cooldownRemaining(key) {
   return Math.max(0, attemptState[key].lockUntil - Date.now());
@@ -141,10 +161,12 @@ function registerFailedAttempt(key) {
     const delay = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** (s.count - FREE_ATTEMPTS - 1));
     s.lockUntil = Date.now() + delay;
   }
+  persistAttemptState(key);
 }
 
 function registerSuccess(key) {
   attemptState[key] = { count: 0, lockUntil: 0 };
+  persistAttemptState(key);
 }
 
 // Disables btn and shows a live countdown for as long as the cooldown
@@ -179,12 +201,12 @@ function toast(msg, type = 'ok') {
 }
 
 /* ── KDF — PBKDF2-SHA256 (current, no deps) ────────── */
-async function deriveKeyPbkdf2(pass, saltBytes) {
+async function deriveKeyPbkdf2(pass, saltBytes, iterations = PBKDF2_ITERATIONS_CURRENT) {
   const keyMaterial = await crypto.subtle.importKey(
     'raw', te.encode(pass), 'PBKDF2', false, ['deriveKey']
   );
   return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: saltBytes, iterations: 600_000, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: saltBytes, iterations, hash: 'SHA-256' },
     keyMaterial,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -237,10 +259,10 @@ async function deriveKeyArgon2(pass, saltBytes) {
 }
 
 /* ── KDF dispatcher ─────────────────────────────────── */
-async function deriveKey(pass, saltBytes, kdf = KDF_PBKDF2) {
+async function deriveKey(pass, saltBytes, kdf = KDF_PBKDF2, iterations = PBKDF2_ITERATIONS_CURRENT) {
   return kdf === KDF_ARGON2
     ? deriveKeyArgon2(pass, saltBytes)
-    : deriveKeyPbkdf2(pass, saltBytes);
+    : deriveKeyPbkdf2(pass, saltBytes, iterations);
 }
 
 /* ── Re-encrypt all entries under a new key ─────────── */
@@ -255,26 +277,32 @@ async function reEncryptAll(entries, oldKey, newKey) {
   }));
 }
 
-/* ── Background migration: Argon2 → PBKDF2 ──────────── */
-// Called after a successful Argon2 unlock with CK already set.
+/* ── Background upgrade: Argon2id → PBKDF2, or low-iteration
+   PBKDF2 → current iteration count ──────────────────────────
+   Called after a successful unlock with CK already set, whenever the
+   vault's on-disk KDF params are weaker than PBKDF2_ITERATIONS_CURRENT. */
 async function migrateToPbkdf2(pass) {
+  const fromArgon2 = CUR_KDF === KDF_ARGON2;
   try {
     const entries = await dbGetAll();
     const ns  = rnd(16);
-    const nk  = await deriveKeyPbkdf2(pass, ns);
+    const nk  = await deriveKeyPbkdf2(pass, ns); // uses PBKDF2_ITERATIONS_CURRENT
     const re  = await reEncryptAll(entries, CK, nk);
     await dbClear();
     for (const e of re) { const { id, ...rest } = e; await dbAdd(rest); }
-    CK = nk; SALT = ns; CUR_KDF = KDF_PBKDF2;
+    CK = nk; SALT = ns; CUR_KDF = KDF_PBKDF2; CUR_ITER = PBKDF2_ITERATIONS_CURRENT;
     await metaPut('salt', b64e(ns));
     await metaPut('kdf',  KDF_PBKDF2);
+    await metaPut('iterations', PBKDF2_ITERATIONS_CURRENT);
     envCache.clear();
     markUnsaved();
     updateSidebarMeta();
     broadcastLock(); // any other open tab is now holding a stale key — force it to relock
-    toast('Vault migrated from Argon2id → PBKDF2', 'info');
+    toast(fromArgon2
+      ? 'Vault migrated from Argon2id → PBKDF2'
+      : 'Vault upgraded to current PBKDF2 iteration count', 'info');
   } catch (err) {
-    console.warn('KDF migration failed (non-fatal):', err);
+    console.warn('KDF upgrade failed (non-fatal):', err);
   }
 }
 
@@ -1220,7 +1248,11 @@ function markUnsaved() { $('sync-banner').style.display = 'flex'; }
 async function exportBackup() {
   const all  = await dbGetAll();
   const tabs = await tabGetAll();
-  const data = { version: VERSION, kdf: CUR_KDF, salt: b64e(SALT), entries: all, tabs, ts: Date.now() };
+  const data = {
+    version: VERSION, kdf: CUR_KDF, salt: b64e(SALT),
+    iterations: CUR_KDF === KDF_PBKDF2 ? CUR_ITER : undefined,
+    entries: all, tabs, ts: Date.now(),
+  };
   const a   = document.createElement('a');
   a.href    = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type:'application/json' }));
   a.download = `vault_backup_${VERSION}_${new Date().toISOString().slice(0, 10)}.json`;
@@ -1242,13 +1274,14 @@ async function changePassword() {
   try {
     const entries = await dbGetAll();
     const ns  = rnd(16);
-    const nk  = await deriveKeyPbkdf2(np, ns);
+    const nk  = await deriveKeyPbkdf2(np, ns); // uses PBKDF2_ITERATIONS_CURRENT
     const re  = await reEncryptAll(entries, CK, nk);
     await dbClear();
     for (const e of re) { const { id, ...rest } = e; await dbAdd(rest); }
-    CK = nk; SALT = ns; CUR_KDF = KDF_PBKDF2;
+    CK = nk; SALT = ns; CUR_KDF = KDF_PBKDF2; CUR_ITER = PBKDF2_ITERATIONS_CURRENT;
     await metaPut('salt', b64e(ns));
     await metaPut('kdf',  KDF_PBKDF2);
+    await metaPut('iterations', PBKDF2_ITERATIONS_CURRENT);
     envCache.clear();
     $('change-pass-new').value = ''; $('change-pass-confirm').value = '';
     markUnsaved();
@@ -1291,6 +1324,9 @@ async function wipeVault() {
 async function init() {
   DB = await openDB();
   $('app-version').textContent = VERSION;
+  await loadAttemptState();
+  if (cooldownRemaining('unlock')  > 0) applyCooldownUI('unlock',  $('unlock-btn'),  'Unlock vault');
+  if (cooldownRemaining('restore') > 0) applyCooldownUI('restore', $('restore-btn'), 'Restore & decrypt');
 
   const hasSalt = !!(await metaGet('salt'));
   document.querySelectorAll('#auth-view .tab').forEach(t =>
@@ -1315,11 +1351,13 @@ async function init() {
     btn.disabled = true; btn.textContent = 'Initialising…';
     try {
       const s = rnd(16);
-      CK = await deriveKeyPbkdf2(key, s);
+      CK = await deriveKeyPbkdf2(key, s); // uses PBKDF2_ITERATIONS_CURRENT
       SALT = s;
       CUR_KDF = KDF_PBKDF2;
+      CUR_ITER = PBKDF2_ITERATIONS_CURRENT;
       await metaPut('salt', b64e(s));
       await metaPut('kdf',  KDF_PBKDF2);
+      await metaPut('iterations', PBKDF2_ITERATIONS_CURRENT);
       $('new-key').value = ''; $('new-confirm').value = '';
       await unlockUI();
     } catch (err) { toast('Failed: ' + err.message, 'err'); }
@@ -1339,10 +1377,13 @@ async function init() {
       const saltStr = await metaGet('salt');
       if (!saltStr) throw new Error('No vault found');
       // No kdf in meta → old vault → Argon2id
-      const kdf = (await metaGet('kdf')) || KDF_ARGON2;
-      const s   = b64d(saltStr);
+      const kdf  = (await metaGet('kdf')) || KDF_ARGON2;
+      // No stored iteration count → vault predates that field → it was
+      // derived at the legacy iteration count.
+      const iter = kdf === KDF_PBKDF2 ? ((await metaGet('iterations')) || PBKDF2_ITERATIONS_LEGACY) : undefined;
+      const s    = b64d(saltStr);
       if (kdf === KDF_ARGON2) btn.textContent = 'Loading Argon2…';
-      const k = await deriveKey(key, s, kdf);
+      const k = await deriveKey(key, s, kdf, iter);
       // Verify against first entry
       const entries = await dbGetAll();
       if (entries.length) {
@@ -1350,11 +1391,12 @@ async function init() {
           { name:'AES-GCM', iv: b64d(entries[0].encrypted.iv) }, k, b64d(entries[0].encrypted.ct)
         );
       }
-      CK = k; SALT = s; CUR_KDF = kdf;
+      CK = k; SALT = s; CUR_KDF = kdf; CUR_ITER = iter ?? PBKDF2_ITERATIONS_CURRENT;
       registerSuccess('unlock');
       await unlockUI();
-      // Background migrate if Argon2 — migrateToPbkdf2 updates CUR_KDF when done
-      if (kdf === KDF_ARGON2) migrateToPbkdf2(key);
+      // Background-upgrade weak KDF params — migrateToPbkdf2 re-encrypts
+      // under PBKDF2_ITERATIONS_CURRENT and updates CUR_KDF/CUR_ITER when done.
+      if (kdf === KDF_ARGON2 || CUR_ITER < PBKDF2_ITERATIONS_CURRENT) migrateToPbkdf2(key);
     } catch (err) {
       failed = true;
       const msg = err.message?.includes('Argon2') || err.message?.includes('argon2')
@@ -1395,9 +1437,12 @@ async function init() {
     try {
       // No kdf field in backup → old backup → Argon2id
       const backupKdf = pendingBackup.kdf || KDF_ARGON2;
+      // No iterations field → backup predates it → it was encrypted at the
+      // legacy iteration count.
+      const backupIter = backupKdf === KDF_PBKDF2 ? (pendingBackup.iterations || PBKDF2_ITERATIONS_LEGACY) : undefined;
       const s = b64d(pendingBackup.salt);
       if (backupKdf === KDF_ARGON2) btn.textContent = 'Loading Argon2…';
-      const k = await deriveKey(key, s, backupKdf);
+      const k = await deriveKey(key, s, backupKdf, backupIter);
       // Verify
       if (pendingBackup.entries?.length) {
         const e0 = pendingBackup.entries[0];
@@ -1426,24 +1471,29 @@ async function init() {
 
       await metaPut('salt', pendingBackup.salt);
       await metaPut('kdf',  backupKdf);
-      CK = k; SALT = s; CUR_KDF = backupKdf;
+      if (backupKdf === KDF_PBKDF2) await metaPut('iterations', backupIter);
+      CK = k; SALT = s; CUR_KDF = backupKdf; CUR_ITER = backupKdf === KDF_PBKDF2 ? backupIter : PBKDF2_ITERATIONS_CURRENT;
       broadcastLock(); // restoring rewrites salt/kdf — any other open tab must relock
 
-      // Immediately re-encrypt under PBKDF2 if backup was Argon2
-      if (backupKdf === KDF_ARGON2) {
-        btn.textContent = 'Migrating to PBKDF2…';
+      // Immediately re-encrypt under current PBKDF2 params if the backup was
+      // encrypted with Argon2id, or with a weaker (legacy) iteration count.
+      if (backupKdf === KDF_ARGON2 || CUR_ITER < PBKDF2_ITERATIONS_CURRENT) {
+        btn.textContent = backupKdf === KDF_ARGON2 ? 'Migrating to PBKDF2…' : 'Upgrading key derivation…';
         const entries = await dbGetAll();
         const ns = rnd(16);
-        const nk = await deriveKeyPbkdf2(key, ns);
+        const nk = await deriveKeyPbkdf2(key, ns); // uses PBKDF2_ITERATIONS_CURRENT
         const re = await reEncryptAll(entries, CK, nk);
         await dbClear();
         for (const e of re) { const { id, ...rest } = e; await dbAdd(rest); }
         CK = nk; SALT = ns;
         await metaPut('salt', b64e(ns));
         await metaPut('kdf',  KDF_PBKDF2);
-        CUR_KDF = KDF_PBKDF2;
+        await metaPut('iterations', PBKDF2_ITERATIONS_CURRENT);
+        CUR_KDF = KDF_PBKDF2; CUR_ITER = PBKDF2_ITERATIONS_CURRENT;
         broadcastLock(); // any other open tab is now holding a stale key — force it to relock
-        toast('Backup restored & migrated to PBKDF2', 'info');
+        toast(backupKdf === KDF_ARGON2
+          ? 'Backup restored & migrated to PBKDF2'
+          : 'Backup restored & upgraded to current iteration count', 'info');
       }
 
       $('restore-key').value = '';
