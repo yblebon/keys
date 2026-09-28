@@ -137,7 +137,7 @@ if (lockChannel) {
 const FREE_ATTEMPTS    = 2;      // first couple of typos cost nothing
 const BASE_DELAY_MS    = 1000;
 const MAX_DELAY_MS     = 30000;
-const attemptState = { unlock: { count: 0, lockUntil: 0 }, restore: { count: 0, lockUntil: 0 } };
+const attemptState = { unlock: { count: 0, lockUntil: 0 }, restore: { count: 0, lockUntil: 0 }, export: { count: 0, lockUntil: 0 } };
 
 async function loadAttemptState() {
   for (const key of Object.keys(attemptState)) {
@@ -635,6 +635,7 @@ function lockVault() {
   resetAddForm();
   $('change-pass-new').value = '';
   $('change-pass-confirm').value = '';
+  closeExportConfirm(); // scrub any master key staged there and hide the overlay
   $('vault-view').style.display    = 'none';
   $('auth-view').style.display     = '';
   $('sidebar-meta').style.display  = 'none';
@@ -1263,6 +1264,57 @@ async function exportBackup() {
   $('sync-banner').style.display = 'none';
 }
 
+// Re-derives a key from a candidate password against the CURRENT unlocked
+// vault's salt/KDF/iterations and checks it actually opens an existing
+// entry. Used to re-confirm the master key before a sensitive action
+// (backup download) rather than trusting that the tab is still attended.
+async function verifyMasterKey(pass) {
+  try {
+    const k = await deriveKey(pass, SALT, CUR_KDF, CUR_ITER);
+    const entries = await dbGetAll();
+    if (!entries.length) return true; // nothing to verify against — same as unlock's own edge case
+    await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: b64d(entries[0].encrypted.iv) }, k, b64d(entries[0].encrypted.ct)
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* ── Export confirmation overlay — re-verify master key first ──────── */
+function openExportConfirm() {
+  if (!isUnlocked()) return;
+  $('export-confirm-key').value = '';
+  $('export-confirm-overlay').style.display = 'flex';
+  $('export-confirm-key').focus();
+  if (cooldownRemaining('export') > 0) applyCooldownUI('export', $('export-confirm-btn'), 'Confirm & download');
+}
+
+function closeExportConfirm() {
+  $('export-confirm-key').value = ''; // scrub whatever was typed
+  $('export-confirm-overlay').style.display = 'none';
+}
+
+async function confirmExport() {
+  const pass = $('export-confirm-key').value;
+  if (!pass) { toast('Enter your master key', 'err'); return; }
+  const rem = cooldownRemaining('export');
+  if (rem > 0) { toast(`Too many attempts — wait ${Math.ceil(rem / 1000)}s`, 'err'); return; }
+  const btn = $('export-confirm-btn');
+  btn.disabled = true; btn.textContent = 'Verifying…';
+  const ok = await verifyMasterKey(pass);
+  btn.disabled = false; btn.textContent = 'Confirm & download';
+  if (!ok) {
+    registerFailedAttempt('export');
+    toast('Incorrect master key', 'err');
+    return;
+  }
+  registerSuccess('export');
+  closeExportConfirm();
+  await exportBackup();
+}
+
 /* ── Change password — always upgrades to PBKDF2 ───── */
 async function changePassword() {
   const np  = $('change-pass-new').value;
@@ -1311,6 +1363,7 @@ async function wipeVault() {
   resetAddForm();
   $('change-pass-new').value = '';
   $('change-pass-confirm').value = '';
+  closeExportConfirm(); // scrub any master key staged there and hide the overlay
   $('vault-view').style.display   = 'none';
   $('auth-view').style.display    = '';
   $('sidebar-meta').style.display = 'none';
@@ -1618,7 +1671,17 @@ async function init() {
   $('change-pass-btn').addEventListener('click', changePassword);
   $('wipe-btn').addEventListener('click', wipeVault);
   $('lock-btn').addEventListener('click', lockVault);
-  $('export-btn').addEventListener('click', exportBackup);
+  $('export-btn').addEventListener('click', openExportConfirm);
+  $('export-confirm-btn').addEventListener('click', confirmExport);
+  $('export-confirm-cancel').addEventListener('click', closeExportConfirm);
+  $('export-confirm-key').addEventListener('keydown', e => { if (e.key === 'Enter') confirmExport(); });
+  // Click on the dimmed backdrop (not the card itself) closes it, same as pressing Cancel
+  $('export-confirm-overlay').addEventListener('click', e => {
+    if (e.target === e.currentTarget) closeExportConfirm();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && $('export-confirm-overlay').style.display !== 'none') closeExportConfirm();
+  });
 
   document.addEventListener('keydown', resetLock);
   document.addEventListener('click',   resetLock);
