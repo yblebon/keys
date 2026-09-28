@@ -1105,6 +1105,43 @@
             font-size: 0.83rem;
         }
 
+        /* ── Modal overlay (export confirmation) ──────────────────────────────── */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(20,27,48,0.45);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 200;
+        }
+
+        .modal-card {
+            width: 100%;
+            max-width: 380px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            box-shadow: 0 20px 60px rgba(30,20,60,0.25);
+            animation: fadeIn 0.15s ease;
+        }
+
+        .modal-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+
+        .modal-desc {
+            font-size: 0.8rem;
+            color: var(--text3);
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+
         /* ── Card footer ───────────────────────────────────────────────────── */
         .card-footer {
             padding: 16px 28px;
@@ -1611,5 +1648,27 @@
     </div>
 
 </main>
+
+<!-- Export confirmation overlay — re-verifies the master key before a
+     decrypt-ready backup is written to disk, so a backup can't be pulled
+     off an unlocked-but-unattended session without knowing the key. -->
+<div id="export-confirm-overlay" class="modal-overlay" style="display:none">
+    <div class="modal-card">
+        <div class="modal-title">Confirm master key</div>
+        <p class="modal-desc">The downloaded file can be decrypted with your master key. Re-enter it to confirm this download.</p>
+        <div class="input-group" style="margin-bottom:16px">
+            <div class="input-with-toggle">
+                <input type="password" id="export-confirm-key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true"
+                       placeholder="Master key">
+                <button class="toggle-btn" data-target="export-confirm-key" aria-label="Toggle visibility">👁</button>
+            </div>
+        </div>
+        <div class="add-entry-actions">
+            <button id="export-confirm-btn" class="btn btn-primary">Confirm &amp; download</button>
+            <button type="button" id="export-confirm-cancel" class="btn btn-ghost">Cancel</button>
+        </div>
+    </div>
+</div>
+
 </body>
 </html>
