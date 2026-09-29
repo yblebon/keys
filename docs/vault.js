@@ -11,6 +11,7 @@
    automatically: the old fixed categories become tabs of the same
    name, and every entry is assigned to the tab matching its type. */
 
+const APP         = 'keys';
 const VERSION     = 'v2.1.0';
 const DB_NAME     = 'vault_db';
 const DB_VERSION  = 2;           // bumped to add the 'tabs' store
@@ -1246,6 +1247,14 @@ function clearClipboardNow() {
 /* ── Misc UI ────────────────────────────────────────── */
 function markUnsaved() { $('sync-banner').style.display = 'flex'; }
 
+// Mirrors: echo "${APP}-${VERSION}-$(date -u +%Y%m%dT%H%MZ)"
+function backupFileStamp() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const ts = `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}T${p(d.getUTCHours())}${p(d.getUTCMinutes())}Z`;
+  return `${APP}-${VERSION}-${ts}`;
+}
+
 async function exportBackup() {
   const all  = await dbGetAll();
   const tabs = await tabGetAll();
@@ -1256,7 +1265,7 @@ async function exportBackup() {
   };
   const a   = document.createElement('a');
   a.href    = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type:'application/json' }));
-  a.download = `vault_backup_${VERSION}_${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `${backupFileStamp()}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 100);
   lastSyncTime = new Date();
