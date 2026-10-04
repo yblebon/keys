@@ -75,6 +75,8 @@
             --red-dim:        rgba(225,74,74,0.1);
             --purple:         #8b5cf6;
             --cyan:           #0891b2;
+            --rose:           #be123c;
+            --rose-dim:       rgba(190,18,60,0.1);
             --mono:           'Consolas', 'Menlo', 'Monaco', 'Courier New', monospace;
             --sans:           -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
             --radius:         10px;
@@ -201,6 +203,35 @@
             padding: 0 10px;
             margin-bottom: 8px;
         }
+
+        .sidebar-nav-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 10px;
+            margin-bottom: 8px;
+        }
+
+        .sidebar-nav-title-row .sidebar-nav-title { padding: 0; margin-bottom: 0; }
+
+        .tabs-sort-btn {
+            background: transparent;
+            border: 1px solid var(--sb-border);
+            color: var(--sb-text3);
+            font-family: var(--mono);
+            font-size: 0.6rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            padding: 2px 6px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .tabs-sort-btn:hover { color: var(--sb-active-text); border-color: var(--accent); }
+
+        /* Dragged tab — dropped onto another one to reorder (switches to manual sort) */
+        .tab-custom.dragging { opacity: 0.4; }
 
         .nav-item {
             display: flex;
@@ -340,7 +371,7 @@
             color: var(--sb-text2);
         }
 
-        /* 3-column grid — 5 categories now that Files exist */
+        /* 3-column grid — 6 categories now that Billing exists */
         .category-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -523,6 +554,22 @@
             opacity: 0.6;
             pointer-events: none;
         }
+
+        .search-scope-btn {
+            background: var(--surface2);
+            color: var(--text3);
+            border: 1px solid var(--border);
+            padding: 7px 12px;
+            border-radius: 20px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+
+        .search-scope-btn:hover { color: var(--text2); border-color: var(--border-hover); }
+        .search-scope-btn.active { background: var(--accent-dim); color: var(--accent-bright); border-color: var(--accent); }
 
         .view-toggle {
             display: flex;
@@ -722,6 +769,9 @@
 
         input[type="text"],
         input[type="password"],
+        input[type="date"],
+        input[type="number"],
+        select,
         textarea {
             width: 100%;
             padding: 11px 14px;
@@ -737,6 +787,9 @@
 
         input[type="text"]:focus,
         input[type="password"]:focus,
+        input[type="date"]:focus,
+        input[type="number"]:focus,
+        select:focus,
         textarea:focus {
             border-color: var(--border-focus);
             box-shadow: 0 0 0 3px var(--accent-glow);
@@ -1335,6 +1388,35 @@
             padding: 20px 0;
         }
 
+        /* ── Billing entries: renewal badge + price ───────────────────────────── */
+        .billing-info-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .billing-badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 3px 9px;
+            border-radius: 20px;
+            letter-spacing: 0.01em;
+        }
+
+        .billing-badge.billing-ok      { background: var(--green-dim); color: var(--green); }
+        .billing-badge.billing-soon    { background: var(--amber-dim); color: var(--amber); }
+        .billing-badge.billing-due     { background: var(--rose-dim);  color: var(--rose); }
+        .billing-badge.billing-overdue { background: var(--red-dim);   color: var(--red); }
+
+        .billing-price {
+            font-family: var(--mono);
+            font-size: 0.78rem;
+            color: var(--text2);
+        }
+
         /* ── Scrollbar ─────────────────────────────────────────────────────── */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -1359,6 +1441,7 @@
             #sidebar-nav-wrap { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
             .sidebar-nav-section { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-top: 0 !important; }
             .sidebar-nav-title { display: none; }
+            .sidebar-nav-title-row { display: none; }
             #sidebar-tab-nav { display: flex; gap: 6px; }
             .nav-add-btn { width: auto; white-space: nowrap; }
             .content-area { padding: 20px 14px; }
@@ -1393,8 +1476,11 @@
     <div id="sidebar-nav-wrap" class="locked-hidden">
         <!-- Tabs — user-created, each holding a mixed list of secrets -->
         <div class="sidebar-nav-section">
-            <div class="sidebar-nav-title">Tabs</div>
-            <div id="sidebar-tab-nav"><!-- rendered by JS: one .nav-item.tab-custom per tab --></div>
+            <div class="sidebar-nav-title-row">
+                <div class="sidebar-nav-title">Tabs</div>
+                <button type="button" id="tabs-sort-az-btn" class="tabs-sort-btn" title="Sort tabs alphabetically">A–Z</button>
+            </div>
+            <div id="sidebar-tab-nav"><!-- rendered by JS: one .nav-item.tab-custom per tab, draggable to reorder --></div>
             <button type="button" id="add-tab-btn" class="nav-add-btn">+ New tab</button>
         </div>
 
@@ -1443,6 +1529,10 @@
                     <div class="category-pill">
                         <span id="count-file" class="category-pill-count">0</span>
                         <span class="category-pill-name">Files</span>
+                    </div>
+                    <div class="category-pill">
+                        <span id="count-billing" class="category-pill-count">0</span>
+                        <span class="category-pill-name">Billing</span>
                     </div>
                 </div>
             </div>
@@ -1549,6 +1639,7 @@
                     <div class="search-wrap">
                         <input type="text" id="v-search" placeholder="Search by title or tag…" autocomplete="off">
                     </div>
+                    <button type="button" id="search-scope-btn" class="search-scope-btn" title="Search across all tabs">All tabs</button>
                     <div class="view-toggle">
                         <button type="button" id="view-grid-btn" class="view-btn active" title="Grid view">▦</button>
                         <button type="button" id="view-list-btn" class="view-btn" title="List view">☰</button>
@@ -1572,6 +1663,7 @@
                         <button type="button" class="type-btn" data-type="cert">📜 Cert</button>
                         <button type="button" class="type-btn" data-type="env">🧩 Env</button>
                         <button type="button" class="type-btn" data-type="file">📎 File</button>
+                        <button type="button" class="type-btn" data-type="billing">💳 Billing</button>
                     </div>
 
                     <!-- File importer (keys + certs only) — extracts text content -->
@@ -1598,6 +1690,33 @@
                              role="button" aria-label="Upload file to encrypt">
                             <span id="attachment-file-label">Click or drop a file to encrypt</span>
                             <input type="file" id="attachment-file-input" style="display:none">
+                        </div>
+                    </div>
+
+                    <!-- Billing fields (billing only) — renewal date, cycle, price, reminder lead time -->
+                    <div id="billing-fields-ui" style="display:none">
+                        <div class="two-col" style="margin-bottom:10px">
+                            <div class="input-group" style="margin-bottom:0">
+                                <label for="n-billing-date">Renewal date</label>
+                                <input type="date" id="n-billing-date">
+                            </div>
+                            <div class="input-group" style="margin-bottom:0">
+                                <label for="n-billing-cycle">Billing cycle</label>
+                                <select id="n-billing-cycle">
+                                    <option value="monthly">Monthly</option>
+                                    <option value="annually">Annually</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="two-col" style="margin-bottom:10px">
+                            <div class="input-group" style="margin-bottom:0">
+                                <label for="n-billing-price">Price</label>
+                                <input type="number" min="0" step="0.01" id="n-billing-price" placeholder="0.00">
+                            </div>
+                            <div class="input-group" style="margin-bottom:0">
+                                <label for="n-billing-reminder">Remind (days before)</label>
+                                <input type="number" min="0" step="1" id="n-billing-reminder" value="7">
+                            </div>
                         </div>
                     </div>
 

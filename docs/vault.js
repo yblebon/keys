@@ -37,8 +37,12 @@ const ARGON2_SRI = 'sha256-d8ZLlGuvGlEW3FkfS5ll1jaxtFX3Xt0tSlh8t14BaHs=';
 
 // Default names used when migrating a legacy (pre-tabs) vault/backup.
 const TYPE_TAB_DEFAULTS = { pw: 'Passwords', key: 'Keys', cert: 'Certs', env: 'Envs' };
-const TYPE_LABELS = { pw: 'PW', key: 'KEY', cert: 'CERT', env: 'ENV', file: 'FILE' };
-const TYPE_COLORS = { pw: 'var(--accent-bright)', key: 'var(--purple)', cert: 'var(--amber)', env: 'var(--green)', file: 'var(--cyan)' };
+const TYPE_LABELS = { pw: 'PW', key: 'KEY', cert: 'CERT', env: 'ENV', file: 'FILE', billing: 'BILL' };
+const TYPE_COLORS = { pw: 'var(--accent-bright)', key: 'var(--purple)', cert: 'var(--amber)', env: 'var(--green)', file: 'var(--cyan)', billing: 'var(--rose)' };
+
+// Default lead time, in days, for the "renewal coming up" reminder — used
+// whenever a billing entry doesn't specify its own reminderDays.
+const BILLING_REMINDER_DAYS_DEFAULT = 7;
 
 // Local upload cap for attachments — generous for documents/small media,
 // but keeps a single entry from freezing the tab (base64 encode is O(n)
@@ -77,7 +81,9 @@ let curTabId      = null;   // numeric tab id, or the string 'security'
 let curAddType    = 'pw';   // which secret type the add-form is set to
 let addPanelOpen  = false;  // whether the "+ Add" panel is expanded
 let viewMode      = 'grid'; // 'grid' | 'list'
-let TABS          = [];     // in-memory cache of tabs
+let TABS          = [];     // in-memory cache of tabs, always kept sorted per TAB_SORT_MODE
+let TAB_SORT_MODE = 'alpha'; // 'alpha' (default) | 'manual' (drag-reordered — persisted in meta.tabSortMode)
+let searchAllTabs = false;  // when true + a query is typed, search spans every tab instead of just curTabId
 let pendingBackup = null;
 let newEnvVars    = null;
 let newAttachmentFile = null; // { name, mimeType, size, buffer } staged for the add-entry form
@@ -373,6 +379,43 @@ const tabDel    = id    => wrap(txT(true).delete(id));
 const tabsClear = ()    => wrap(txT(true).clear());
 
 /* ── Tabs — creation, migration, rendering ──────────── */
+// Tab sort order: 'alpha' (default) sorts by name regardless of any stored
+// `order` field; 'manual' (entered by dragging a tab in the sidebar) sorts
+// by that `order` field, falling back to creation time for tabs that
+// predate it. The mode itself is persisted in meta.tabSortMode so it
+// survives a reload; TAB_SORT_MODE is loaded once at init().
+function sortTabs(tabs) {
+  const list = [...tabs];
+  return TAB_SORT_MODE === 'manual'
+    ? list.sort((a, b) => (a.order ?? a.created ?? 0) - (b.order ?? b.created ?? 0))
+    : list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+}
+
+async function setTabSortAlphabetical() {
+  TAB_SORT_MODE = 'alpha';
+  await metaPut('tabSortMode', 'alpha');
+  await renderTabsBar();
+  toast('Tabs sorted A–Z', 'info');
+}
+
+// Drag-and-drop a tab before/onto another one — switches to 'manual' mode
+// and persists a sequential `order` on every tab so the new arrangement
+// sticks (rather than only reordering the in-memory TABS array for this
+// render).
+async function reorderTabs(draggedId, targetId) {
+  if (draggedId === targetId) return;
+  const current = TABS.slice();
+  const fromIdx = current.findIndex(t => t.id === draggedId);
+  const toIdx   = current.findIndex(t => t.id === targetId);
+  if (fromIdx === -1 || toIdx === -1) return;
+  const [moved] = current.splice(fromIdx, 1);
+  current.splice(toIdx, 0, moved);
+  TAB_SORT_MODE = 'manual';
+  await metaPut('tabSortMode', 'manual');
+  for (let i = 0; i < current.length; i++) await tabPut({ ...current[i], order: i });
+  await renderTabsBar();
+}
+
 // Ensures at least one tab exists. On a fresh vault, creates a single
 // "General" tab. On a vault upgraded from the old fixed-category
 // layout (entries exist but no tabs do — or a legacy backup with no
@@ -380,7 +423,7 @@ const tabsClear = ()    => wrap(txT(true).clear());
 // every entry's tabId to match its type.
 async function ensureTabsReady() {
   let tabs = await tabGetAll();
-  if (tabs.length) { TABS = tabs.sort((a, b) => (a.created || 0) - (b.created || 0)); return TABS; }
+  if (tabs.length) { TABS = sortTabs(tabs); return TABS; }
 
   const entries = await dbGetAll();
   if (!entries.length) {
@@ -400,12 +443,12 @@ async function ensureTabsReady() {
     const tabId = madeIds[e.type] ?? fallbackId;
     if (tabId !== undefined && e.tabId !== tabId) await dbPut({ ...e, tabId });
   }
-  TABS = (await tabGetAll()).sort((a, b) => (a.created || 0) - (b.created || 0));
+  TABS = sortTabs(await tabGetAll());
   return TABS;
 }
 
 async function loadTabs() {
-  TABS = (await tabGetAll()).sort((a, b) => (a.created || 0) - (b.created || 0));
+  TABS = sortTabs(await tabGetAll());
   return TABS;
 }
 
@@ -418,7 +461,7 @@ async function renderTabsBar() {
     const count = all.filter(e => e.tabId === t.id).length;
     const color = avatarColor(t.name);
     const initials = avatarInitials(t.name);
-    return `<div class="nav-item tab-custom ${t.id === curTabId ? 'active' : ''}" data-tab-id="${t.id}">
+    return `<div class="nav-item tab-custom ${t.id === curTabId ? 'active' : ''}" data-tab-id="${t.id}" draggable="true">
       <span class="nav-icon" style="background:${color}">${initials}</span>
       <span class="nav-label">${esc(t.name)}</span>
       <span class="nav-count">${count}</span>
@@ -488,6 +531,7 @@ function resetAddForm() {
   $('importer-ui').style.display          = 'none';
   $('env-importer-ui').style.display      = 'none';
   $('attachment-upload-ui').style.display = 'none';
+  $('billing-fields-ui').style.display    = 'none';
   $('n-content').style.display = '';
   $('n-name').value = ''; $('n-tag').value = ''; $('n-content').value = '';
   newEnvVars = null;
@@ -495,6 +539,10 @@ function resetAddForm() {
   newAttachmentFile = null;
   updateAttachmentLabel();
   $('attachment-file-input').value = '';
+  $('n-billing-date').value = '';
+  $('n-billing-cycle').value = 'monthly';
+  $('n-billing-price').value = '';
+  $('n-billing-reminder').value = String(BILLING_REMINDER_DAYS_DEFAULT);
 }
 
 function setAddType(type) {
@@ -503,7 +551,8 @@ function setAddType(type) {
   $('importer-ui').style.display          = (type === 'key' || type === 'cert') ? '' : 'none';
   $('env-importer-ui').style.display      = type === 'env' ? '' : 'none';
   $('attachment-upload-ui').style.display = type === 'file' ? '' : 'none';
-  $('n-content').style.display            = (type === 'env' || type === 'file') ? 'none' : '';
+  $('billing-fields-ui').style.display    = type === 'billing' ? '' : 'none';
+  $('n-content').style.display            = (type === 'env' || type === 'file' || type === 'billing') ? 'none' : '';
 }
 
 function updateAttachmentLabel() {
@@ -659,6 +708,7 @@ async function unlockUI() {
   $('sidebar-nav-divider').classList.remove('locked-hidden');
   resetAddForm();
   switchTab(TABS.length ? TABS[0].id : 'security');
+  checkBillingReminders(); // fire-and-forget — one summary toast per unlock, not per render
 }
 
 /* ── Auth mode ──────────────────────────────────────── */
@@ -679,6 +729,7 @@ async function updateCounts(all) {
   $('count-cert').textContent = all.filter(e => e.type === 'cert').length;
   $('count-env').textContent  = all.filter(e => e.type === 'env').length;
   $('count-file').textContent = all.filter(e => e.type === 'file').length;
+  $('count-billing').textContent = all.filter(e => e.type === 'billing').length;
 }
 
 function updateSidebarMeta() {
@@ -724,38 +775,104 @@ function typeBadge(type) {
   return `<span class="type-badge" style="color:${color};border-color:${color}">${label}</span>`;
 }
 
-/* ── Entry list (mixed types, scoped to curTabId) ───── */
+// Joins an entry's tag and (in cross-tab search results) its source tab
+// name with a bullet, falling back to a non-breaking space to hold the
+// line's height when there's nothing to show.
+function entrySubLine(tag, tabName) {
+  const parts = [tag, tabName].filter(Boolean).map(esc);
+  return parts.length ? parts.join(' · ') : '&nbsp;';
+}
+
+/* ── Billing entries: renewal date + price, with a "due soon" badge ── */
+// Whole-day difference between today (local) and a 'YYYY-MM-DD' date,
+// ignoring time-of-day so "today" always reads as 0 regardless of hour.
+function daysUntilDate(dateStr) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const target = new Date(`${dateStr}T00:00:00`);
+  return Math.round((target - today) / 86400000);
+}
+
+function billingStatus(data) {
+  const days = daysUntilDate(data.renewalDate);
+  const reminderDays = data.reminderDays ?? BILLING_REMINDER_DAYS_DEFAULT;
+  if (days < 0)  return { days, cls: 'billing-overdue', label: `Overdue ${Math.abs(days)}d` };
+  if (days === 0) return { days, cls: 'billing-due',     label: 'Due today' };
+  if (days <= reminderDays) return { days, cls: 'billing-soon', label: `Renews in ${days}d` };
+  return { days, cls: 'billing-ok', label: `Renews in ${days}d` };
+}
+
+function billingPriceLabel(data) {
+  if (data.price == null || data.price === '') return '';
+  return `$${Number(data.price).toFixed(2)}/${data.cycle === 'annually' ? 'yr' : 'mo'}`;
+}
+
+// Scans every tab's billing entries and toasts a short summary of anything
+// due within its own reminder window (or already overdue). Called once per
+// unlock, not on every render, so it doesn't spam the toast stack.
+async function checkBillingReminders() {
+  const all = await dbGetAll();
+  const billingEntries = all.filter(e => e.type === 'billing');
+  if (!billingEntries.length) return;
+  const due = [];
+  for (const e of billingEntries) {
+    try {
+      const data = JSON.parse(await aesDecrypt(e.encrypted));
+      const { days } = billingStatus(data);
+      const reminderDays = data.reminderDays ?? BILLING_REMINDER_DAYS_DEFAULT;
+      if (days <= reminderDays) due.push({ name: e.name, days });
+    } catch {}
+  }
+  if (!due.length) return;
+  due.sort((a, b) => a.days - b.days);
+  const fmt = d => d.days < 0 ? `${d.name} (${Math.abs(d.days)}d overdue)` : d.days === 0 ? `${d.name} (today)` : `${d.name} (${d.days}d)`;
+  const shown = due.slice(0, 4).map(fmt).join(', ');
+  const more  = due.length > 4 ? ` +${due.length - 4} more` : '';
+  toast(`⏰ Billing due soon: ${shown}${more}`, 'info');
+}
+
+/* ── Entry list (mixed types, scoped to curTabId — or, with
+   searchAllTabs on and a non-empty query, spanning every tab) ───── */
 async function renderEntryList() {
   if (!isUnlocked() || curTabId === 'security' || curTabId == null) return;
-  const q    = ($('v-search')?.value || '').toLowerCase();
-  const all  = await dbGetAll();
+  const q        = ($('v-search')?.value || '').toLowerCase();
+  const crossTab = searchAllTabs && !!q;
+  const all      = await dbGetAll();
+  const tabNameById = crossTab ? Object.fromEntries(TABS.map(t => [t.id, t.name])) : null;
   const rows = all
-    .filter(e => e.tabId === curTabId &&
+    .filter(e => (crossTab || e.tabId === curTabId) &&
       (!q || e.name.toLowerCase().includes(q) || (e.tag || '').toLowerCase().includes(q)))
     .sort((a, b) => (a.created || 0) - (b.created || 0));
   updateCounts(all);
-  $('list-meta').textContent = rows.length ? `Displaying 1 – ${rows.length} of ${rows.length}` : '';
+  $('list-meta').textContent = rows.length
+    ? `Displaying 1 – ${rows.length} of ${rows.length}${crossTab ? ' across all tabs' : ''}`
+    : '';
 
   const c = $('list-container');
   if (!rows.length) {
-    c.innerHTML = `<div class="empty-state">No secrets in this tab yet.</div>`;
+    c.innerHTML = `<div class="empty-state">No secrets${crossTab ? ' match your search' : ' in this tab yet'}.</div>`;
     return;
   }
 
   const rendered = await Promise.all(rows.map(async e => {
+    const tabName = crossTab ? tabNameById[e.tabId] : null;
     if (e.type === 'env') {
       let vars = {};
       try { vars = JSON.parse(await aesDecrypt(e.encrypted)); envCache.set(e.id, vars); } catch {}
-      return renderEnvItemHTML(e, vars);
+      return renderEnvItemHTML(e, vars, tabName);
     }
-    if (e.type === 'file') return renderFileItemHTML(e);
-    return renderEntryItemHTML(e);
+    if (e.type === 'file') return renderFileItemHTML(e, tabName);
+    if (e.type === 'billing') {
+      let data = {};
+      try { data = JSON.parse(await aesDecrypt(e.encrypted)); } catch {}
+      return renderBillingItemHTML(e, data, tabName);
+    }
+    return renderEntryItemHTML(e, tabName);
   }));
   c.innerHTML = rendered.join('');
   c.querySelectorAll('.env-file-input').forEach(inp => inp.addEventListener('change', handleEnvFileInput));
 }
 
-function renderEntryItemHTML(e) {
+function renderEntryItemHTML(e, tabName) {
   const color = avatarColor(e.name);
   const initials = avatarInitials(e.name);
   return `
@@ -765,7 +882,7 @@ function renderEntryItemHTML(e) {
         ${typeBadge(e.type)}
       </div>
       <span class="entry-card-name">${esc(e.name)}</span>
-      <div class="entry-card-sub">${e.tag ? esc(e.tag) : '&nbsp;'}</div>
+      <div class="entry-card-sub">${entrySubLine(e.tag, tabName)}</div>
       <div class="entry-card-actions">
         <button class="btn btn-view"  data-action="view"   data-id="${e.id}">View</button>
         <button class="btn btn-copy"  data-action="copy"   data-id="${e.id}">Copy</button>
@@ -783,7 +900,60 @@ function renderEntryItemHTML(e) {
     </div>`;
 }
 
-function renderFileItemHTML(e) {
+function renderBillingItemHTML(e, data, tabName) {
+  const color    = avatarColor(e.name);
+  const initials = avatarInitials(e.name);
+  const { cls, label } = billingStatus(data);
+  const priceLabel = billingPriceLabel(data);
+  return `
+    <div class="entry-card" data-id="${e.id}">
+      <div class="entry-card-top">
+        <span class="avatar" style="background:${color}">${initials}</span>
+        ${typeBadge('billing')}
+      </div>
+      <span class="entry-card-name">${esc(e.name)}</span>
+      <div class="entry-card-sub">${entrySubLine(e.tag, tabName)}</div>
+      <div class="billing-info-row">
+        <span class="billing-badge ${cls}">${label}</span>
+        ${priceLabel ? `<span class="billing-price">${priceLabel}</span>` : ''}
+      </div>
+      <div class="entry-card-actions">
+        <button class="btn btn-edit" data-action="billing-edit" data-id="${e.id}">Edit</button>
+        <button class="btn btn-del"  data-action="delete" data-id="${e.id}" title="Delete">×</button>
+      </div>
+      <div class="edit-area" id="edit-${e.id}" style="display:none">
+        <div class="two-col" style="margin-bottom:10px">
+          <div class="input-group" style="margin-bottom:0">
+            <label for="edit-billing-date-${e.id}">Renewal date</label>
+            <input type="date" id="edit-billing-date-${e.id}">
+          </div>
+          <div class="input-group" style="margin-bottom:0">
+            <label for="edit-billing-cycle-${e.id}">Cycle</label>
+            <select id="edit-billing-cycle-${e.id}">
+              <option value="monthly">Monthly</option>
+              <option value="annually">Annually</option>
+            </select>
+          </div>
+        </div>
+        <div class="two-col" style="margin-bottom:10px">
+          <div class="input-group" style="margin-bottom:0">
+            <label for="edit-billing-price-${e.id}">Price</label>
+            <input type="number" min="0" step="0.01" id="edit-billing-price-${e.id}" placeholder="0.00">
+          </div>
+          <div class="input-group" style="margin-bottom:0">
+            <label for="edit-billing-reminder-${e.id}">Remind (days before)</label>
+            <input type="number" min="0" step="1" id="edit-billing-reminder-${e.id}">
+          </div>
+        </div>
+        <div class="edit-actions">
+          <button class="btn btn-primary" data-action="billing-edit-save"   data-id="${e.id}">Save</button>
+          <button class="btn btn-ghost"   data-action="billing-edit-cancel" data-id="${e.id}">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderFileItemHTML(e, tabName) {
   const color    = avatarColor(e.name);
   const initials = avatarInitials(e.name);
   const isImage  = (e.mimeType || '').startsWith('image/');
@@ -794,7 +964,7 @@ function renderFileItemHTML(e) {
         ${typeBadge('file')}
       </div>
       <span class="entry-card-name">${esc(e.name)}</span>
-      <div class="entry-card-sub">${esc(e.fileName || '')}${e.size != null ? ' · ' + formatBytes(e.size) : ''}</div>
+      <div class="entry-card-sub">${esc(e.fileName || '')}${e.size != null ? ' · ' + formatBytes(e.size) : ''}${tabName ? ` · ${esc(tabName)}` : ''}</div>
       <div class="entry-card-actions">
         ${isImage ? `<button class="btn btn-view" data-action="file-preview" data-id="${e.id}">Preview</button>` : ''}
         <button class="btn btn-copy" data-action="file-download" data-id="${e.id}">Download</button>
@@ -804,7 +974,7 @@ function renderFileItemHTML(e) {
     </div>`;
 }
 
-function renderEnvItemHTML(e, vars) {
+function renderEnvItemHTML(e, vars, tabName) {
   const keys    = Object.keys(vars);
   const count   = keys.length;
   const preview = keys.slice(0, 3).join(', ') + (keys.length > 3 ? '…' : '');
@@ -817,6 +987,7 @@ function renderEnvItemHTML(e, vars) {
         ${typeBadge('env')}
         <span class="env-name">${esc(e.name)}</span>
         ${e.tag ? `<span class="entry-tag">${esc(e.tag)}</span>` : ''}
+        ${tabName ? `<span class="entry-tag">${esc(tabName)}</span>` : ''}
         <span class="env-badge">${count} var${count !== 1 ? 's' : ''}</span>
         ${preview ? `<span class="env-preview">${esc(preview)}</span>` : ''}
       </div>
@@ -981,6 +1152,52 @@ async function handleEntryAction(e) {
 
   if (action === 'edit-cancel') {
     $(`edit-ta-${id}`).value = ''; // scrub plaintext out of the hidden textarea
+    $(`edit-${id}`).style.display = 'none';
+  }
+
+  if (action === 'billing-edit') {
+    const editArea = $(`edit-${id}`);
+    if (!editArea) return;
+    const already = editArea.style.display !== 'none';
+    if (already) { editArea.style.display = 'none'; return; }
+    document.querySelectorAll('.edit-area').forEach(el => el.style.display = 'none');
+    const all   = await dbGetAll();
+    const entry = all.find(e => e.id === id);
+    const data  = JSON.parse(await aesDecrypt(entry.encrypted));
+    $(`edit-billing-date-${id}`).value     = data.renewalDate || '';
+    $(`edit-billing-cycle-${id}`).value    = data.cycle || 'monthly';
+    $(`edit-billing-price-${id}`).value    = data.price ?? '';
+    $(`edit-billing-reminder-${id}`).value = data.reminderDays ?? BILLING_REMINDER_DAYS_DEFAULT;
+    editArea.style.display = '';
+  }
+
+  if (action === 'billing-edit-save') {
+    const date = $(`edit-billing-date-${id}`).value;
+    if (!date) { toast('Renewal date is required', 'err'); return; }
+    const cycle        = $(`edit-billing-cycle-${id}`).value;
+    const price        = parseFloat($(`edit-billing-price-${id}`).value) || 0;
+    const reminderDays = parseInt($(`edit-billing-reminder-${id}`).value, 10);
+    const saveBtn = document.querySelector(`[data-action="billing-edit-save"][data-id="${id}"]`);
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    try {
+      const all   = await dbGetAll();
+      const entry = all.find(e => e.id === id);
+      entry.encrypted = await aesEncrypt(JSON.stringify({
+        renewalDate: date, cycle, price,
+        reminderDays: Number.isFinite(reminderDays) ? reminderDays : BILLING_REMINDER_DAYS_DEFAULT,
+      }));
+      entry.updated = Date.now();
+      await dbPut(entry);
+      markUnsaved();
+      toast('Billing entry updated', 'ok');
+      await renderEntryList();
+    } catch (err) {
+      toast('Save failed: ' + err.message, 'err');
+      saveBtn.disabled = false; saveBtn.textContent = 'Save';
+    }
+  }
+
+  if (action === 'billing-edit-cancel') {
     $(`edit-${id}`).style.display = 'none';
   }
 
@@ -1387,6 +1604,7 @@ async function init() {
   DB = await openDB();
   $('app-version').textContent = VERSION;
   await loadAttemptState();
+  TAB_SORT_MODE = (await metaGet('tabSortMode')) || 'alpha';
   if (cooldownRemaining('unlock')  > 0) applyCooldownUI('unlock',  $('unlock-btn'),  'Unlock vault');
   if (cooldownRemaining('restore') > 0) applyCooldownUI('restore', $('restore-btn'), 'Restore & decrypt');
 
@@ -1589,6 +1807,38 @@ async function init() {
   });
   $('add-tab-btn').addEventListener('click', addTab);
   $('tab-security').addEventListener('click', () => switchTab('security'));
+  $('tabs-sort-az-btn').addEventListener('click', setTabSortAlphabetical);
+
+  /* Drag-and-drop tab reordering — dropping switches to 'manual' sort mode */
+  let dragTabId = null;
+  $('sidebar-tab-nav').addEventListener('dragstart', e => {
+    const item = e.target.closest('.tab-custom');
+    if (!item) return;
+    dragTabId = parseInt(item.dataset.tabId, 10);
+    item.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  $('sidebar-tab-nav').addEventListener('dragend', e => {
+    e.target.closest('.tab-custom')?.classList.remove('dragging');
+    dragTabId = null;
+  });
+  $('sidebar-tab-nav').addEventListener('dragover', e => {
+    if (dragTabId != null) e.preventDefault(); // allow drop
+  });
+  $('sidebar-tab-nav').addEventListener('drop', async e => {
+    e.preventDefault();
+    const target = e.target.closest('.tab-custom');
+    if (!target || dragTabId == null) return;
+    await reorderTabs(dragTabId, parseInt(target.dataset.tabId, 10));
+    dragTabId = null;
+  });
+
+  /* Search: typing filters the current tab, or every tab when "All tabs" is on */
+  $('search-scope-btn').addEventListener('click', () => {
+    searchAllTabs = !searchAllTabs;
+    $('search-scope-btn').classList.toggle('active', searchAllTabs);
+    renderEntryList();
+  });
 
   /* Add-entry panel toggle + type selector */
   $('add-entry-btn').addEventListener('click', () => toggleAddPanel());
@@ -1627,6 +1877,16 @@ async function init() {
     } else if (curAddType === 'file') {
       if (!newAttachmentFile) { toast('Choose a file first', 'err'); return; }
       await addFileEntry(name, tag, curTabId, newAttachmentFile);
+    } else if (curAddType === 'billing') {
+      const renewalDate = $('n-billing-date').value;
+      if (!renewalDate) { toast('Renewal date is required', 'err'); return; }
+      const cycle        = $('n-billing-cycle').value;
+      const price        = parseFloat($('n-billing-price').value) || 0;
+      const reminderDays = parseInt($('n-billing-reminder').value, 10);
+      await addEntry(name, JSON.stringify({
+        renewalDate, cycle, price,
+        reminderDays: Number.isFinite(reminderDays) ? reminderDays : BILLING_REMINDER_DAYS_DEFAULT,
+      }), tag, 'billing', curTabId);
     } else {
       const content = $('n-content').value.trim();
       if (!content) { toast('Content is required', 'err'); return; }
