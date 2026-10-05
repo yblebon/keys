@@ -37,12 +37,104 @@ const ARGON2_SRI = 'sha256-d8ZLlGuvGlEW3FkfS5ll1jaxtFX3Xt0tSlh8t14BaHs=';
 
 // Default names used when migrating a legacy (pre-tabs) vault/backup.
 const TYPE_TAB_DEFAULTS = { pw: 'Passwords', key: 'Keys', cert: 'Certs', env: 'Envs' };
-const TYPE_LABELS = { pw: 'PW', key: 'KEY', cert: 'CERT', env: 'ENV', file: 'FILE', billing: 'BILL' };
-const TYPE_COLORS = { pw: 'var(--accent-bright)', key: 'var(--purple)', cert: 'var(--amber)', env: 'var(--green)', file: 'var(--cyan)', billing: 'var(--rose)' };
+const TYPE_LABELS = { pw: 'PW', key: 'KEY', cert: 'CERT', env: 'ENV', file: 'FILE', billing: 'BILL', crypto: 'CRYPTO' };
+const TYPE_COLORS = { pw: 'var(--accent-bright)', key: 'var(--purple)', cert: 'var(--amber)', env: 'var(--green)', file: 'var(--cyan)', billing: 'var(--rose)', crypto: 'var(--teal)' };
 
 // Default lead time, in days, for the "renewal coming up" reminder — used
 // whenever a billing entry doesn't specify its own reminderDays.
 const BILLING_REMINDER_DAYS_DEFAULT = 7;
+
+// Supported coins for the 'crypto' entry type. `pattern` is a lenient
+// sanity check against the address format that coin's mainnet actually
+// uses (not a full checksum/validity proof — that would need per-chain
+// crypto libraries) — it catches pasted-wrong-coin and typo mistakes
+// without false-rejecting a technically-valid address this regex doesn't
+// anticipate. `memoField`, where present, is a SEPARATE piece of data a
+// receiving address needs beyond the address itself (XRP's destination
+// tag, Monero's payment ID) — mixing it into the address field is a classic
+// way to send funds that an exchange then can't credit to the right account.
+const CRYPTO_COINS = {
+  btc: {
+    label: 'Bitcoin (BTC)',
+    pattern: /^(1[1-9A-HJ-NP-Za-km-z]{25,34}|3[1-9A-HJ-NP-Za-km-z]{25,34}|bc1[a-zA-HJ-NP-Z0-9]{25,90})$/,
+  },
+  ethereum: {
+    label: 'Ethereum (ETH)',
+    pattern: /^0x[a-fA-F0-9]{40}$/,
+  },
+  xrp: {
+    label: 'XRP',
+    pattern: /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/,
+    memoField: {
+      label: 'Destination tag (optional)',
+      hint: 'Numeric tag some exchanges need to credit a deposit — a separate field from the address itself.',
+      validate: v => v === '' || /^\d{1,10}$/.test(v),
+    },
+  },
+  usdt: {
+    label: 'USDT (Tether)',
+    pattern: /^(0x[a-fA-F0-9]{40}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})$/,
+    hint: 'USDT runs on several networks — accepts an ERC-20 (0x…), TRC-20 (T…), or Solana-style address. Make sure it matches the network you intend to use.',
+  },
+  monero: {
+    label: 'Monero (XMR)',
+    pattern: /^[48][0-9A-Za-z]{94}$/,
+    memoField: {
+      label: 'Payment ID (optional)',
+      hint: '16 or 64 hex characters — a separate field from the address itself, used to identify a specific payment.',
+      validate: v => v === '' || /^[0-9a-fA-F]{16}$/.test(v) || /^[0-9a-fA-F]{64}$/.test(v),
+    },
+  },
+  bnb: {
+    label: 'BNB',
+    pattern: /^(0x[a-fA-F0-9]{40}|bnb1[a-z0-9]{38})$/,
+    hint: 'Accepts a BNB Smart Chain (0x…) or legacy Beacon Chain (bnb1…) address.',
+  },
+  tron: {
+    label: 'Tron (TRX)',
+    pattern: /^T[1-9A-HJ-NP-Za-km-z]{33}$/,
+  },
+  solana: {
+    label: 'Solana (SOL)',
+    pattern: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/,
+  },
+};
+
+function cryptoCoinOptionsHTML(selected) {
+  return Object.entries(CRYPTO_COINS)
+    .map(([key, c]) => `<option value="${key}" ${key === selected ? 'selected' : ''}>${esc(c.label)}</option>`)
+    .join('');
+}
+
+// Returns an error string, or null if the address passes this coin's
+// lenient format check.
+function validateCryptoAddress(coinKey, address) {
+  const coin = CRYPTO_COINS[coinKey];
+  if (!coin) return 'Unknown cryptocurrency';
+  if (!address) return 'Wallet address is required';
+  if (!coin.pattern.test(address.trim())) return `That doesn't look like a valid ${coin.label} address`;
+  return null;
+}
+
+// Shows/hides and relabels the memo/tag field for whichever coin is
+// currently selected — only XRP and Monero define one for now.
+function updateCryptoMemoField(coinKey, wrapEl, labelEl) {
+  const memoField = CRYPTO_COINS[coinKey]?.memoField;
+  if (!wrapEl || !labelEl) return;
+  if (memoField) {
+    wrapEl.style.display = '';
+    labelEl.textContent = memoField.label;
+  } else {
+    wrapEl.style.display = 'none';
+  }
+}
+
+function updateCryptoHint(coinKey, hintEl) {
+  if (!hintEl) return;
+  const hint = CRYPTO_COINS[coinKey]?.hint;
+  if (hint) { hintEl.textContent = hint; hintEl.style.display = ''; }
+  else hintEl.style.display = 'none';
+}
 
 // Local upload cap for attachments — generous for documents/small media,
 // but keeps a single entry from freezing the tab (base64 encode is O(n)
@@ -532,6 +624,7 @@ function resetAddForm() {
   $('env-importer-ui').style.display      = 'none';
   $('attachment-upload-ui').style.display = 'none';
   $('billing-fields-ui').style.display    = 'none';
+  $('crypto-fields-ui').style.display     = 'none';
   $('n-content').style.display = '';
   $('n-name').value = ''; $('n-tag').value = ''; $('n-content').value = '';
   newEnvVars = null;
@@ -543,6 +636,11 @@ function resetAddForm() {
   $('n-billing-cycle').value = 'monthly';
   $('n-billing-price').value = '';
   $('n-billing-reminder').value = String(BILLING_REMINDER_DAYS_DEFAULT);
+  $('n-crypto-coin').value = 'btc';
+  $('n-crypto-address').value = '';
+  $('n-crypto-memo').value = '';
+  updateCryptoMemoField('btc', $('n-crypto-memo-wrap'), $('n-crypto-memo-label'));
+  updateCryptoHint('btc', $('n-crypto-hint'));
 }
 
 function setAddType(type) {
@@ -552,7 +650,8 @@ function setAddType(type) {
   $('env-importer-ui').style.display      = type === 'env' ? '' : 'none';
   $('attachment-upload-ui').style.display = type === 'file' ? '' : 'none';
   $('billing-fields-ui').style.display    = type === 'billing' ? '' : 'none';
-  $('n-content').style.display            = (type === 'env' || type === 'file' || type === 'billing') ? 'none' : '';
+  $('crypto-fields-ui').style.display     = type === 'crypto' ? '' : 'none';
+  $('n-content').style.display            = (type === 'env' || type === 'file' || type === 'billing' || type === 'crypto') ? 'none' : '';
 }
 
 function updateAttachmentLabel() {
@@ -730,6 +829,7 @@ async function updateCounts(all) {
   $('count-env').textContent  = all.filter(e => e.type === 'env').length;
   $('count-file').textContent = all.filter(e => e.type === 'file').length;
   $('count-billing').textContent = all.filter(e => e.type === 'billing').length;
+  $('count-crypto').textContent = all.filter(e => e.type === 'crypto').length;
 }
 
 function updateSidebarMeta() {
@@ -866,6 +966,11 @@ async function renderEntryList() {
       try { data = JSON.parse(await aesDecrypt(e.encrypted)); } catch {}
       return renderBillingItemHTML(e, data, tabName);
     }
+    if (e.type === 'crypto') {
+      let data = {};
+      try { data = JSON.parse(await aesDecrypt(e.encrypted)); } catch {}
+      return renderCryptoItemHTML(e, data, tabName);
+    }
     return renderEntryItemHTML(e, tabName);
   }));
   c.innerHTML = rendered.join('');
@@ -948,6 +1053,52 @@ function renderBillingItemHTML(e, data, tabName) {
         <div class="edit-actions">
           <button class="btn btn-primary" data-action="billing-edit-save"   data-id="${e.id}">Save</button>
           <button class="btn btn-ghost"   data-action="billing-edit-cancel" data-id="${e.id}">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderCryptoItemHTML(e, data, tabName) {
+  const color    = avatarColor(e.name);
+  const initials = avatarInitials(e.name);
+  const coin      = CRYPTO_COINS[data.coin];
+  const coinLabel = coin?.label || data.coin || '?';
+  const addr      = data.address || '';
+  const shortAddr = addr.length > 12 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr;
+  const hasMemo   = !!(coin?.memoField);
+  return `
+    <div class="entry-card" data-id="${e.id}">
+      <div class="entry-card-top">
+        <span class="avatar" style="background:${color}">${initials}</span>
+        ${typeBadge('crypto')}
+      </div>
+      <span class="entry-card-name">${esc(e.name)}</span>
+      <div class="entry-card-sub">${entrySubLine(`${coinLabel} · ${shortAddr}`, tabName)}</div>
+      <div class="entry-card-actions">
+        <button class="btn btn-view"  data-action="view"        data-id="${e.id}">View</button>
+        <button class="btn btn-copy"  data-action="copy"        data-id="${e.id}">Copy</button>
+        <button class="btn btn-edit"  data-action="crypto-edit" data-id="${e.id}">Edit</button>
+        <button class="btn btn-del"   data-action="delete"      data-id="${e.id}" title="Delete">×</button>
+      </div>
+      <div class="secret-area" id="sec-${e.id}"></div>
+      <div class="edit-area" id="edit-${e.id}" style="display:none">
+        <div class="two-col" style="margin-bottom:10px">
+          <div class="input-group" style="margin-bottom:0">
+            <label for="edit-crypto-coin-${e.id}">Cryptocurrency</label>
+            <select id="edit-crypto-coin-${e.id}">${cryptoCoinOptionsHTML(data.coin)}</select>
+          </div>
+          <div class="input-group" id="edit-crypto-memo-wrap-${e.id}" style="margin-bottom:0;display:${hasMemo ? '' : 'none'}">
+            <label for="edit-crypto-memo-${e.id}" id="edit-crypto-memo-label-${e.id}">${esc(coin?.memoField?.label || 'Memo')}</label>
+            <input type="text" id="edit-crypto-memo-${e.id}" value="${esc(data.memo || '')}" autocomplete="off">
+          </div>
+        </div>
+        <div class="input-group">
+          <label for="edit-crypto-address-${e.id}">Wallet address</label>
+          <input type="text" id="edit-crypto-address-${e.id}" value="${esc(addr)}" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="edit-actions">
+          <button class="btn btn-primary" data-action="crypto-edit-save"   data-id="${e.id}">Save</button>
+          <button class="btn btn-ghost"   data-action="crypto-edit-cancel" data-id="${e.id}">Cancel</button>
         </div>
       </div>
     </div>`;
@@ -1083,7 +1234,15 @@ async function handleEntryAction(e) {
     if (!open) {
       const all   = await dbGetAll();
       const entry = all.find(e => e.id === id);
-      area.textContent = await aesDecrypt(entry.encrypted);
+      if (entry.type === 'crypto') {
+        const data = JSON.parse(await aesDecrypt(entry.encrypted));
+        const memoField = CRYPTO_COINS[data.coin]?.memoField;
+        const lines = [`Address: ${data.address}`];
+        if (memoField && data.memo) lines.push(`${memoField.label.replace(' (optional)', '')}: ${data.memo}`);
+        area.textContent = lines.join('\n');
+      } else {
+        area.textContent = await aesDecrypt(entry.encrypted);
+      }
       btn.classList.add('btn-view-active');
     } else {
       area.textContent = '';
@@ -1096,7 +1255,11 @@ async function handleEntryAction(e) {
     const all   = await dbGetAll();
     const entry = all.find(e => e.id === id);
     if (!entry || entry.type === 'env') return;
-    const secret = await aesDecrypt(entry.encrypted);
+    // Copy just the address for crypto entries — the memo/tag (when present)
+    // is a separate field a receiver needs on top of it, not part of it.
+    const secret = entry.type === 'crypto'
+      ? JSON.parse(await aesDecrypt(entry.encrypted)).address
+      : await aesDecrypt(entry.encrypted);
     await copyToClipboard(secret);
     btn.textContent = '✓ Copied';
     btn.classList.add('btn-copied');
@@ -1198,6 +1361,58 @@ async function handleEntryAction(e) {
   }
 
   if (action === 'billing-edit-cancel') {
+    $(`edit-${id}`).style.display = 'none';
+  }
+
+  if (action === 'crypto-edit') {
+    const editArea = $(`edit-${id}`);
+    if (!editArea) return;
+    const already = editArea.style.display !== 'none';
+    if (already) { editArea.style.display = 'none'; return; }
+    document.querySelectorAll('.edit-area').forEach(el => el.style.display = 'none');
+    const all   = await dbGetAll();
+    const entry = all.find(e => e.id === id);
+    const data  = JSON.parse(await aesDecrypt(entry.encrypted));
+    const coinSel  = $(`edit-crypto-coin-${id}`);
+    const memoWrap = $(`edit-crypto-memo-wrap-${id}`);
+    const memoLbl  = $(`edit-crypto-memo-label-${id}`);
+    coinSel.value = data.coin;
+    $(`edit-crypto-address-${id}`).value = data.address || '';
+    $(`edit-crypto-memo-${id}`).value    = data.memo || '';
+    updateCryptoMemoField(data.coin, memoWrap, memoLbl);
+    coinSel.onchange = () => updateCryptoMemoField(coinSel.value, memoWrap, memoLbl);
+    editArea.style.display = '';
+  }
+
+  if (action === 'crypto-edit-save') {
+    const coin    = $(`edit-crypto-coin-${id}`).value;
+    const address = $(`edit-crypto-address-${id}`).value.trim();
+    const addrErr = validateCryptoAddress(coin, address);
+    if (addrErr) { toast(addrErr, 'err'); return; }
+    const memoField = CRYPTO_COINS[coin].memoField;
+    const memo = memoField ? $(`edit-crypto-memo-${id}`).value.trim() : '';
+    if (memoField && !memoField.validate(memo)) {
+      toast(`Invalid ${memoField.label.replace(' (optional)', '')}`, 'err');
+      return;
+    }
+    const saveBtn = document.querySelector(`[data-action="crypto-edit-save"][data-id="${id}"]`);
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    try {
+      const all   = await dbGetAll();
+      const entry = all.find(e => e.id === id);
+      entry.encrypted = await aesEncrypt(JSON.stringify({ coin, address, memo }));
+      entry.updated = Date.now();
+      await dbPut(entry);
+      markUnsaved();
+      toast('Crypto entry updated', 'ok');
+      await renderEntryList();
+    } catch (err) {
+      toast('Save failed: ' + err.message, 'err');
+      saveBtn.disabled = false; saveBtn.textContent = 'Save';
+    }
+  }
+
+  if (action === 'crypto-edit-cancel') {
     $(`edit-${id}`).style.display = 'none';
   }
 
@@ -1847,6 +2062,15 @@ async function init() {
     b.addEventListener('click', () => setAddType(b.dataset.type))
   );
 
+  /* Crypto coin picker: populate from the single CRYPTO_COINS source of
+     truth, and show/relabel the memo field + format hint per coin. */
+  $('n-crypto-coin').innerHTML = cryptoCoinOptionsHTML('btc');
+  $('n-crypto-coin').addEventListener('change', () => {
+    const coin = $('n-crypto-coin').value;
+    updateCryptoMemoField(coin, $('n-crypto-memo-wrap'), $('n-crypto-memo-label'));
+    updateCryptoHint(coin, $('n-crypto-hint'));
+  });
+
   /* Grid / list view toggle */
   $('view-grid-btn').addEventListener('click', () => setViewMode('grid'));
   $('view-list-btn').addEventListener('click', () => setViewMode('list'));
@@ -1887,6 +2111,18 @@ async function init() {
         renewalDate, cycle, price,
         reminderDays: Number.isFinite(reminderDays) ? reminderDays : BILLING_REMINDER_DAYS_DEFAULT,
       }), tag, 'billing', curTabId);
+    } else if (curAddType === 'crypto') {
+      const coin    = $('n-crypto-coin').value;
+      const address = $('n-crypto-address').value.trim();
+      const addrErr = validateCryptoAddress(coin, address);
+      if (addrErr) { toast(addrErr, 'err'); return; }
+      const memoField = CRYPTO_COINS[coin].memoField;
+      const memo = memoField ? $('n-crypto-memo').value.trim() : '';
+      if (memoField && !memoField.validate(memo)) {
+        toast(`Invalid ${memoField.label.replace(' (optional)', '')}`, 'err');
+        return;
+      }
+      await addEntry(name, JSON.stringify({ coin, address, memo }), tag, 'crypto', curTabId);
     } else {
       const content = $('n-content').value.trim();
       if (!content) { toast('Content is required', 'err'); return; }
