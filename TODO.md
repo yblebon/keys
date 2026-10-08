@@ -5,3 +5,5 @@
 - I would like also to be able one or multpl text notes to a service text or code: usefu for some comments
 - Avoid duplicate services
 - Search for service
+- Add favorites tabs
+- Billing has some bugs, notification not updatting on date change; change the date to dd/mm and then renewal to monthly or annually, the fdata is irrelevant
