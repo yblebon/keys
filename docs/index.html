@@ -307,6 +307,26 @@
         .nav-item:hover .nav-close { opacity: 1; }
         .nav-close:hover { color: #ff9d9d; }
 
+        .nav-fav {
+            flex-shrink: 0;
+            opacity: 0;
+            cursor: pointer;
+            color: var(--sb-text3);
+            font-size: 0.82rem;
+            line-height: 1;
+            transition: opacity 0.15s, color 0.15s;
+        }
+
+        .nav-item:hover .nav-fav { opacity: 1; }
+        .nav-fav.active { opacity: 1; color: #f5c563; }
+        .nav-fav:hover { color: #f5c563; }
+
+        .nav-fav-divider {
+            height: 1px;
+            background: var(--sb-border);
+            margin: 6px 10px;
+        }
+
         .nav-add-btn {
             width: 100%;
             margin-top: 4px;
@@ -1196,6 +1216,27 @@
             margin-bottom: 16px;
         }
 
+        .generator-card {
+            max-width: 640px;
+            max-height: 88vh;
+            overflow-y: auto;
+        }
+
+        .gen-opts .field-label:first-child { margin-top: 0; }
+        .gen-opts .field-label { margin-top: 14px; }
+
+        .gen-cmd-preview {
+            font-family: var(--mono);
+            font-size: 0.8rem;
+            color: var(--accent-bright);
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 10px 14px;
+            margin-bottom: 14px;
+            word-break: break-all;
+        }
+
         /* ── Card footer ───────────────────────────────────────────────────── */
         .card-footer {
             padding: 16px 28px;
@@ -1410,7 +1451,11 @@
         .billing-badge.billing-ok      { background: var(--green-dim); color: var(--green); }
         .billing-badge.billing-soon    { background: var(--amber-dim); color: var(--amber); }
         .billing-badge.billing-due     { background: var(--rose-dim);  color: var(--rose); }
-        .billing-badge.billing-overdue { background: var(--red-dim);   color: var(--red); }
+
+        .billing-schedule {
+            font-size: 0.72rem;
+            color: var(--text3);
+        }
 
         .billing-price {
             font-family: var(--mono);
@@ -1648,6 +1693,7 @@
                 <div class="topbar-title" id="current-tab-title">Vault</div>
                 <div class="topbar-controls" id="topbar-controls">
                     <button type="button" id="add-entry-btn" class="btn-pill-add">+ Add</button>
+                    <button type="button" id="open-generator-btn" class="btn-pill-add btn-pill-cancel" title="Generate a random value — doesn't save anything">🎲 Generate</button>
                     <div class="search-wrap">
                         <input type="text" id="v-search" placeholder="Search by title or tag…" autocomplete="off">
                     </div>
@@ -1708,17 +1754,24 @@
 
                     <!-- Billing fields (billing only) — renewal date, cycle, price, reminder lead time -->
                     <div id="billing-fields-ui" style="display:none">
+                        <div class="input-group">
+                            <label for="n-billing-cycle">Billing cycle</label>
+                            <select id="n-billing-cycle">
+                                <option value="monthly">Monthly</option>
+                                <option value="annually">Annually</option>
+                            </select>
+                        </div>
+                        <!-- Billing is recurring — only the day (and, for an annual
+                             bill, the month) matter. The calendar year is never asked
+                             for since it's irrelevant to a recurring reminder. -->
                         <div class="two-col" style="margin-bottom:10px">
                             <div class="input-group" style="margin-bottom:0">
-                                <label for="n-billing-date">Renewal date</label>
-                                <input type="date" id="n-billing-date">
+                                <label for="n-billing-day">Renews on (day)</label>
+                                <input type="number" min="1" max="31" id="n-billing-day" placeholder="1–31">
                             </div>
-                            <div class="input-group" style="margin-bottom:0">
-                                <label for="n-billing-cycle">Billing cycle</label>
-                                <select id="n-billing-cycle">
-                                    <option value="monthly">Monthly</option>
-                                    <option value="annually">Annually</option>
-                                </select>
+                            <div class="input-group" id="n-billing-month-wrap" style="margin-bottom:0;display:none">
+                                <label for="n-billing-month">Month</label>
+                                <select id="n-billing-month"><!-- populated by JS from BILLING_MONTH_NAMES --></select>
                             </div>
                         </div>
                         <div class="two-col" style="margin-bottom:10px">
@@ -1818,6 +1871,146 @@
         <div class="add-entry-actions">
             <button id="export-confirm-btn" class="btn btn-primary">Confirm &amp; download</button>
             <button type="button" id="export-confirm-cancel" class="btn btn-ghost">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Generator overlay — standalone value generator. Never writes into the
+     add-entry form or saves anything: generate, then copy if you want it. -->
+<div id="generator-overlay" class="modal-overlay" style="display:none">
+    <div class="modal-card generator-card">
+        <div class="modal-title">Generate a value</div>
+        <p class="modal-desc">Pick a type, click Generate, then Copy — nothing here is saved automatically.</p>
+
+        <div class="type-select" id="gen-type-select">
+            <button type="button" class="type-btn active" data-gen-type="password">🔑 Password</button>
+            <button type="button" class="type-btn" data-gen-type="jwt">🔏 JWT Secret</button>
+            <button type="button" class="type-btn" data-gen-type="apikey">🗝 API Key</button>
+            <button type="button" class="type-btn" data-gen-type="hmac">#️⃣ HMAC</button>
+            <button type="button" class="type-btn" data-gen-type="enc">🔒 Encryption</button>
+            <button type="button" class="type-btn" data-gen-type="rsa">🔑 RSA Pair</button>
+        </div>
+
+        <!-- Password -->
+        <div id="gen-opts-password" class="gen-opts">
+            <div class="field-label">Type</div>
+            <div class="type-select" id="gen-pw-type">
+                <button type="button" class="type-btn active" data-val="passphrase">Passphrase (words)</button>
+                <button type="button" class="type-btn" data-val="chars">Random characters</button>
+                <button type="button" class="type-btn" data-val="pin">PIN</button>
+                <button type="button" class="type-btn" data-val="hex">Hex string</button>
+            </div>
+            <div class="field-label">Complexity</div>
+            <div class="type-select" id="gen-pw-complexity">
+                <button type="button" class="type-btn active" data-val="simple">Simple</button>
+                <button type="button" class="type-btn" data-val="good">Good</button>
+                <button type="button" class="type-btn" data-val="strong">Strong</button>
+                <button type="button" class="type-btn" data-val="verystrong">Very strong</button>
+            </div>
+            <div id="gen-pw-passphrase-opts">
+                <div class="field-label">Separator</div>
+                <div class="type-select" id="gen-pw-separator">
+                    <button type="button" class="type-btn active" data-val="space">Space</button>
+                    <button type="button" class="type-btn" data-val="hyphen">Hyphen</button>
+                    <button type="button" class="type-btn" data-val="dot">Dot</button>
+                    <button type="button" class="type-btn" data-val="camel">CamelCase</button>
+                </div>
+                <div class="field-label">Random digit</div>
+                <div class="type-select" id="gen-pw-digit">
+                    <button type="button" class="type-btn active" data-val="none">None</button>
+                    <button type="button" class="type-btn" data-val="prefix">Prefix</button>
+                    <button type="button" class="type-btn" data-val="suffix">Suffix</button>
+                    <button type="button" class="type-btn" data-val="both">Both</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- JWT Secret -->
+        <div id="gen-opts-jwt" class="gen-opts" style="display:none">
+            <div class="field-label">Length</div>
+            <select id="gen-jwt-length">
+                <option value="32">32 chars (~128 bit)</option>
+                <option value="64" selected>64 chars (~256 bit — recommended)</option>
+                <option value="128">128 chars (~512 bit)</option>
+            </select>
+        </div>
+
+        <!-- API Key -->
+        <div id="gen-opts-apikey" class="gen-opts" style="display:none">
+            <div class="field-label">Format</div>
+            <select id="gen-apikey-format">
+                <option value="alphanumeric">Alphanumeric</option>
+                <option value="hex">Hex</option>
+                <option value="base64url">Base64url</option>
+            </select>
+            <div class="field-label">Length</div>
+            <select id="gen-apikey-length">
+                <option value="16">16 chars</option>
+                <option value="32" selected>32 chars</option>
+                <option value="48">48 chars</option>
+                <option value="64">64 chars</option>
+            </select>
+        </div>
+
+        <!-- HMAC -->
+        <div id="gen-opts-hmac" class="gen-opts" style="display:none">
+            <div class="field-label">Key size (bytes)</div>
+            <select id="gen-hmac-size">
+                <option value="16">16 bytes (128 bit)</option>
+                <option value="32" selected>32 bytes (256 bit — recommended)</option>
+                <option value="64">64 bytes (512 bit)</option>
+            </select>
+            <div class="field-label">Encoding</div>
+            <select id="gen-hmac-encoding">
+                <option value="hex">Hex</option>
+                <option value="base64">Base64</option>
+                <option value="base64url">Base64url</option>
+            </select>
+        </div>
+
+        <!-- Encryption -->
+        <div id="gen-opts-enc" class="gen-opts" style="display:none">
+            <div class="gen-cmd-preview" id="gen-enc-cmd">$ openssl rand -hex 32</div>
+            <div class="field-label">Key size</div>
+            <div class="type-select" id="gen-enc-size">
+                <button type="button" class="type-btn" data-val="16">16 bytes (128 bit)</button>
+                <button type="button" class="type-btn active" data-val="32">32 bytes (256 bit)</button>
+                <button type="button" class="type-btn" data-val="64">64 bytes (512 bit)</button>
+            </div>
+            <div class="field-label">Encoding</div>
+            <div class="type-select" id="gen-enc-encoding">
+                <button type="button" class="type-btn active" data-val="hex">Hex (openssl default)</button>
+                <button type="button" class="type-btn" data-val="base64">Base64</button>
+                <button type="button" class="type-btn" data-val="base64url">Base64url</button>
+            </div>
+        </div>
+
+        <!-- RSA Pair -->
+        <div id="gen-opts-rsa" class="gen-opts" style="display:none">
+            <div class="field-label">Key size</div>
+            <select id="gen-rsa-size">
+                <option value="2048">2048 bit</option>
+                <option value="4096" selected>4096 bit</option>
+            </select>
+        </div>
+
+        <div class="add-entry-actions" style="margin-top:14px">
+            <button type="button" id="gen-generate-btn" class="btn btn-primary">Generate</button>
+            <button type="button" id="gen-copy-btn" class="btn btn-ghost" disabled>Copy</button>
+            <button type="button" id="gen-copy-env-btn" class="btn btn-ghost" style="display:none" disabled>Copy .env line</button>
+        </div>
+
+        <div class="field-label" style="margin-top:14px">Output</div>
+        <textarea id="gen-output" class="edit-textarea" readonly spellcheck="false" placeholder="click generate…" style="min-height:80px"></textarea>
+
+        <div id="gen-output2-wrap" style="display:none;margin-top:12px">
+            <div class="field-label">Public key</div>
+            <textarea id="gen-output-pub" class="edit-textarea" readonly spellcheck="false" style="min-height:80px"></textarea>
+            <button type="button" id="gen-copy-pub-btn" class="btn btn-ghost" style="margin-top:8px" disabled>Copy public key</button>
+        </div>
+
+        <div class="add-entry-actions" style="margin-top:14px">
+            <button type="button" id="generator-close-btn" class="btn btn-ghost" style="width:100%">Close</button>
         </div>
     </div>
 </div>

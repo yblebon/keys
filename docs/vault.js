@@ -194,6 +194,113 @@ const b64e  = buf => {
 };
 const b64d  = s   => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 const rnd   = n   => { const b = new Uint8Array(n); crypto.getRandomValues(b); return b; };
+const genHex       = bytes => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+const genBase64Url = bytes => b64e(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+/* ── Value generator — standalone, never writes into the add-entry form.
+   Generate, then Copy if you want it; nothing here touches the vault or
+   any entry until the user pastes it somewhere themselves. ──────────── */
+// Unbiased random integer in [0, maxExclusive) via rejection sampling —
+// a plain `rnd(n) % maxExclusive` would slightly favor low values for any
+// maxExclusive that doesn't evenly divide 256^n.
+function genRandomInt(maxExclusive) {
+  if (maxExclusive <= 1) return 0;
+  const bytesNeeded = Math.max(1, Math.ceil(Math.log2(maxExclusive) / 8));
+  const ceiling = 256 ** bytesNeeded;
+  const maxUnbiased = Math.floor(ceiling / maxExclusive) * maxExclusive;
+  let val;
+  do {
+    val = rnd(bytesNeeded).reduce((acc, b) => acc * 256 + b, 0);
+  } while (val >= maxUnbiased);
+  return val % maxExclusive;
+}
+
+function genRandomString(charset, length) {
+  let s = '';
+  for (let i = 0; i < length; i++) s += charset[genRandomInt(charset.length)];
+  return s;
+}
+
+function genPickWord(list) { return list[genRandomInt(list.length)]; }
+
+const GEN_CHARSET_LOWER   = 'abcdefghijklmnopqrstuvwxyz';
+const GEN_CHARSET_UPPER   = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const GEN_CHARSET_DIGITS  = '0123456789';
+const GEN_CHARSET_SYMBOLS = '!@#$%^&*()-_=+[]{};:,.?';
+
+function genCharsetFor(complexity) {
+  if (complexity === 'simple') return GEN_CHARSET_LOWER + GEN_CHARSET_DIGITS;
+  if (complexity === 'good')   return GEN_CHARSET_LOWER + GEN_CHARSET_UPPER + GEN_CHARSET_DIGITS;
+  return GEN_CHARSET_LOWER + GEN_CHARSET_UPPER + GEN_CHARSET_DIGITS + GEN_CHARSET_SYMBOLS; // strong / verystrong
+}
+
+const GEN_PW_WORDCOUNT = { simple: 3, good: 4, strong: 5, verystrong: 7 };
+const GEN_PW_CHARLEN   = { simple: 8, good: 12, strong: 16, verystrong: 24 };
+const GEN_PW_PINLEN    = { simple: 4, good: 6, strong: 8, verystrong: 10 };
+const GEN_PW_HEXBYTES  = { simple: 8, good: 16, strong: 32, verystrong: 64 };
+
+// Short, ordinary, easy-to-type words (not a cryptographic Diceware list —
+// this generator is a convenience helper, not the vault's own KDF/key
+// material). ~140 words gives ~7.1 bits/word; complexity scales the word
+// count to compensate (7 words ≈ 50 bits at "very strong").
+const GEN_WORDLIST = [
+  'alpha','amber','anchor','apple','arrow','autumn','azure','badge','basil','beacon',
+  'birch','blossom','brave','bridge','bright','bronze','canyon','captain','cedar','chrome',
+  'clever','cloud','comet','coral','crimson','crystal','dawn','delta','desert','diamond',
+  'dragon','dune','eagle','ember','emerald','falcon','feather','fern','flame','forest',
+  'fox','garden','glacier','gold','granite','grove','harbor','hazel','hollow','honey',
+  'horizon','ivory','ivy','jade','jasper','jungle','lagoon','lantern','laurel','lily',
+  'lotus','lunar','maple','marble','maroon','meadow','mint','misty','mountain','nectar',
+  'nova','oak','ocean','olive','onyx','opal','orbit','orchid','otter','panther',
+  'pearl','pebble','phoenix','pine','planet','plum','polar','prairie','quartz','quiet',
+  'rapid','raven','reef','river','rocket','rose','ruby','sage','sandalwood','sapphire',
+  'scarlet','shadow','silver','sky','slate','solar','spruce','star','storm','summit',
+  'sunny','swan','tempest','thunder','tide','timber','topaz','trail','tulip','tundra',
+  'twilight','valley','velvet','violet','vivid','walnut','willow','winter','wolf','zephyr',
+];
+
+function genPassphrase(complexity, separatorKey, digitMode) {
+  const words = Array.from({ length: GEN_PW_WORDCOUNT[complexity] }, () => genPickWord(GEN_WORDLIST));
+  const cased = separatorKey === 'camel' ? words.map(w => w[0].toUpperCase() + w.slice(1)) : words;
+  const joinChar = { space: ' ', hyphen: '-', dot: '.', camel: '' }[separatorKey] ?? ' ';
+  let phrase = cased.join(joinChar);
+  const digit = () => String(genRandomInt(90) + 10); // a 2-digit number, 10-99
+  const glue = separatorKey === 'camel' ? '' : joinChar;
+  if (digitMode === 'prefix' || digitMode === 'both') phrase = digit() + glue + phrase;
+  if (digitMode === 'suffix' || digitMode === 'both') phrase = phrase + glue + digit();
+  return phrase;
+}
+
+function genEncodedBytes(byteLen, encoding) {
+  const bytes = rnd(byteLen);
+  if (encoding === 'hex') return genHex(bytes);
+  if (encoding === 'base64url') return genBase64Url(bytes);
+  return b64e(bytes); // 'base64'
+}
+
+function genOpensslPreview(sizeBytes, encoding) {
+  if (encoding === 'hex') return `$ openssl rand -hex ${sizeBytes}`;
+  if (encoding === 'base64') return `$ openssl rand -base64 ${sizeBytes}`;
+  return `$ openssl rand -base64 ${sizeBytes} | tr '+/' '-_' | tr -d '='`; // base64url has no native openssl flag
+}
+
+function genPemBlock(buf, label) {
+  const b64 = b64e(buf);
+  const lines = b64.match(/.{1,64}/g).join('\n');
+  return `-----BEGIN ${label}-----\n${lines}\n-----END ${label}-----`;
+}
+
+async function genRsaKeyPair(bits) {
+  const keyPair = await crypto.subtle.generateKey(
+    { name: 'RSASSA-PKCS1-v1_5', modulusLength: bits, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+    true, ['sign', 'verify']
+  );
+  const [pub, priv] = await Promise.all([
+    crypto.subtle.exportKey('spki',  keyPair.publicKey),
+    crypto.subtle.exportKey('pkcs8', keyPair.privateKey),
+  ]);
+  return { publicPem: genPemBlock(pub, 'PUBLIC KEY'), privatePem: genPemBlock(priv, 'PRIVATE KEY') };
+}
 
 /* ── Lock-state guard ─────────────────────────────────
    These functions are reachable two ways: through the sidebar UI
@@ -475,12 +582,28 @@ const tabsClear = ()    => wrap(txT(true).clear());
 // `order` field; 'manual' (entered by dragging a tab in the sidebar) sorts
 // by that `order` field, falling back to creation time for tabs that
 // predate it. The mode itself is persisted in meta.tabSortMode so it
-// survives a reload; TAB_SORT_MODE is loaded once at init().
-function sortTabs(tabs) {
+// survives a reload; TAB_SORT_MODE is loaded once at init(). Favorited
+// tabs (tab.favorite) are always pinned ahead of the rest, each group
+// sorted independently by the same mode.
+function sortTabsGroup(tabs) {
   const list = [...tabs];
   return TAB_SORT_MODE === 'manual'
     ? list.sort((a, b) => (a.order ?? a.created ?? 0) - (b.order ?? b.created ?? 0))
     : list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+}
+
+function sortTabs(tabs) {
+  const favs = sortTabsGroup(tabs.filter(t => t.favorite));
+  const rest = sortTabsGroup(tabs.filter(t => !t.favorite));
+  return [...favs, ...rest];
+}
+
+async function toggleTabFavorite(id) {
+  if (!isUnlocked()) return;
+  const tab = TABS.find(t => t.id === id);
+  if (!tab) return;
+  await tabPut({ ...tab, favorite: !tab.favorite });
+  await renderTabsBar();
 }
 
 async function setTabSortAlphabetical() {
@@ -544,22 +667,30 @@ async function loadTabs() {
   return TABS;
 }
 
+function tabNavItemHTML(t, all, curTabId) {
+  const count = all.filter(e => e.tabId === t.id).length;
+  const color = avatarColor(t.name);
+  const initials = avatarInitials(t.name);
+  return `<div class="nav-item tab-custom ${t.id === curTabId ? 'active' : ''}" data-tab-id="${t.id}" draggable="true">
+    <span class="nav-icon" style="background:${color}">${initials}</span>
+    <span class="nav-label">${esc(t.name)}</span>
+    <span class="nav-fav ${t.favorite ? 'active' : ''}" data-action="toggle-favorite" data-tab-id="${t.id}" title="${t.favorite ? 'Unpin from favorites' : 'Pin to favorites'}">${t.favorite ? '★' : '☆'}</span>
+    <span class="nav-count">${count}</span>
+    <span class="nav-close" data-action="delete-tab" data-tab-id="${t.id}" title="Delete tab">×</span>
+  </div>`;
+}
+
 async function renderTabsBar() {
   if (!isUnlocked()) { $('sidebar-tab-nav').innerHTML = ''; return; } // never reveal tab names/counts while locked
   await loadTabs();
   const all  = await dbGetAll();
   const wrap = $('sidebar-tab-nav');
-  wrap.innerHTML = TABS.map(t => {
-    const count = all.filter(e => e.tabId === t.id).length;
-    const color = avatarColor(t.name);
-    const initials = avatarInitials(t.name);
-    return `<div class="nav-item tab-custom ${t.id === curTabId ? 'active' : ''}" data-tab-id="${t.id}" draggable="true">
-      <span class="nav-icon" style="background:${color}">${initials}</span>
-      <span class="nav-label">${esc(t.name)}</span>
-      <span class="nav-count">${count}</span>
-      <span class="nav-close" data-action="delete-tab" data-tab-id="${t.id}" title="Delete tab">×</span>
-    </div>`;
-  }).join('');
+  const favs = TABS.filter(t => t.favorite);
+  const rest = TABS.filter(t => !t.favorite);
+  const favHTML  = favs.map(t => tabNavItemHTML(t, all, curTabId)).join('');
+  const restHTML = rest.map(t => tabNavItemHTML(t, all, curTabId)).join('');
+  const divider  = favs.length && rest.length ? '<div class="nav-fav-divider"></div>' : '';
+  wrap.innerHTML = favHTML + divider + restHTML;
   $('tab-security').classList.toggle('active', curTabId === 'security');
 }
 
@@ -619,7 +750,7 @@ async function deleteTabById(id) {
 /* ── Add-entry form: type selector + collapsible panel ─ */
 function resetAddForm() {
   curAddType = 'pw';
-  document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === 'pw'));
+  $('type-select').querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === 'pw'));
   $('importer-ui').style.display          = 'none';
   $('env-importer-ui').style.display      = 'none';
   $('attachment-upload-ui').style.display = 'none';
@@ -632,8 +763,10 @@ function resetAddForm() {
   newAttachmentFile = null;
   updateAttachmentLabel();
   $('attachment-file-input').value = '';
-  $('n-billing-date').value = '';
   $('n-billing-cycle').value = 'monthly';
+  $('n-billing-day').value = '';
+  $('n-billing-month').value = String(new Date().getMonth() + 1);
+  $('n-billing-month-wrap').style.display = 'none';
   $('n-billing-price').value = '';
   $('n-billing-reminder').value = String(BILLING_REMINDER_DAYS_DEFAULT);
   $('n-crypto-coin').value = 'btc';
@@ -645,7 +778,7 @@ function resetAddForm() {
 
 function setAddType(type) {
   curAddType = type;
-  document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === type));
+  $('type-select').querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === type));
   $('importer-ui').style.display          = (type === 'key' || type === 'cert') ? '' : 'none';
   $('env-importer-ui').style.display      = type === 'env' ? '' : 'none';
   $('attachment-upload-ui').style.display = type === 'file' ? '' : 'none';
@@ -785,6 +918,7 @@ function lockVault() {
   $('change-pass-new').value = '';
   $('change-pass-confirm').value = '';
   closeExportConfirm(); // scrub any master key staged there and hide the overlay
+  closeGenerator();     // scrub any generated secret sitting in the output box
   $('vault-view').style.display    = 'none';
   $('auth-view').style.display     = '';
   $('sidebar-meta').style.display  = 'none';
@@ -883,22 +1017,74 @@ function entrySubLine(tag, tabName) {
   return parts.length ? parts.join(' · ') : '&nbsp;';
 }
 
-/* ── Billing entries: renewal date + price, with a "due soon" badge ── */
-// Whole-day difference between today (local) and a 'YYYY-MM-DD' date,
-// ignoring time-of-day so "today" always reads as 0 regardless of hour.
-function daysUntilDate(dateStr) {
+/* ── Billing entries: recurring renewal (day/month + cycle) + price ──
+   Billing is recurring, not a one-off event, so the calendar YEAR of the
+   renewal is irrelevant and is never stored: only the day-of-month (every
+   type) and, for an annual bill, the month too. The next occurrence is
+   recomputed from "today" on every read — nothing is ever a stale stored
+   date that silently goes "more and more overdue" after it passes without
+   the badge/reminder ever rolling forward to the next real due date. */
+const BILLING_MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+// Clamps day to the actual last day of that year/month (e.g. day 31 in
+// February becomes the 28th/29th) rather than overflowing into the next month.
+function clampBillingDate(year, monthIndex0, day) {
+  const lastDay = new Date(year, monthIndex0 + 1, 0).getDate();
+  return new Date(year, monthIndex0, Math.min(Math.max(day, 1), lastDay));
+}
+
+// Reads old-format entries (a stored full 'renewalDate') transparently, so
+// vaults/backups from before this change keep working without a forced
+// resave — the day/month is simply extracted from the stored date.
+function normalizeBillingData(data) {
+  if (data.day != null) return data;
+  if (data.renewalDate) {
+    const d = new Date(`${data.renewalDate}T00:00:00`);
+    return { ...data, day: d.getDate(), month: d.getMonth() + 1 };
+  }
+  return { ...data, day: 1, month: 1 };
+}
+
+function nextBillingRenewal(rawData) {
+  const data = normalizeBillingData(rawData);
+  const day = Math.min(Math.max(parseInt(data.day, 10) || 1, 1), 31);
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const target = new Date(`${dateStr}T00:00:00`);
-  return Math.round((target - today) / 86400000);
+
+  if (data.cycle === 'annually') {
+    const month = Math.min(Math.max(parseInt(data.month, 10) || 1, 1), 12) - 1;
+    let candidate = clampBillingDate(today.getFullYear(), month, day);
+    if (candidate < today) candidate = clampBillingDate(today.getFullYear() + 1, month, day);
+    return candidate;
+  }
+
+  // monthly — month is irrelevant, only the day-of-month matters
+  let candidate = clampBillingDate(today.getFullYear(), today.getMonth(), day);
+  if (candidate < today) {
+    const nextMonth = today.getMonth() + 1;
+    candidate = nextMonth > 11
+      ? clampBillingDate(today.getFullYear() + 1, 0, day)
+      : clampBillingDate(today.getFullYear(), nextMonth, day);
+  }
+  return candidate;
 }
 
 function billingStatus(data) {
-  const days = daysUntilDate(data.renewalDate);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = Math.round((nextBillingRenewal(data) - today) / 86400000);
   const reminderDays = data.reminderDays ?? BILLING_REMINDER_DAYS_DEFAULT;
-  if (days < 0)  return { days, cls: 'billing-overdue', label: `Overdue ${Math.abs(days)}d` };
-  if (days === 0) return { days, cls: 'billing-due',     label: 'Due today' };
+  if (days === 0) return { days, cls: 'billing-due', label: 'Due today' };
   if (days <= reminderDays) return { days, cls: 'billing-soon', label: `Renews in ${days}d` };
   return { days, cls: 'billing-ok', label: `Renews in ${days}d` };
+}
+
+function billingScheduleLabel(data) {
+  const d = normalizeBillingData(data);
+  const day = Math.min(Math.max(parseInt(d.day, 10) || 1, 1), 31);
+  if (data.cycle === 'annually') {
+    const month = Math.min(Math.max(parseInt(d.month, 10) || 1, 1), 12);
+    return `Annually · ${day} ${BILLING_MONTH_NAMES[month - 1]}`;
+  }
+  return `Monthly · day ${day}`;
 }
 
 function billingPriceLabel(data) {
@@ -907,8 +1093,11 @@ function billingPriceLabel(data) {
 }
 
 // Scans every tab's billing entries and toasts a short summary of anything
-// due within its own reminder window (or already overdue). Called once per
-// unlock, not on every render, so it doesn't spam the toast stack.
+// due within its own reminder window. Called once per unlock, not on every
+// render, so it doesn't spam the toast stack. The next occurrence is always
+// recomputed from today (see nextBillingRenewal), so this never gets stuck
+// repeating a stale date — once a bill's day passes, the very next check
+// already reports its next-cycle occurrence instead.
 async function checkBillingReminders() {
   const all = await dbGetAll();
   const billingEntries = all.filter(e => e.type === 'billing');
@@ -924,7 +1113,7 @@ async function checkBillingReminders() {
   }
   if (!due.length) return;
   due.sort((a, b) => a.days - b.days);
-  const fmt = d => d.days < 0 ? `${d.name} (${Math.abs(d.days)}d overdue)` : d.days === 0 ? `${d.name} (today)` : `${d.name} (${d.days}d)`;
+  const fmt = d => d.days === 0 ? `${d.name} (today)` : `${d.name} (${d.days}d)`;
   const shown = due.slice(0, 4).map(fmt).join(', ');
   const more  = due.length > 4 ? ` +${due.length - 4} more` : '';
   toast(`⏰ Billing due soon: ${shown}${more}`, 'info');
@@ -1009,7 +1198,10 @@ function renderBillingItemHTML(e, data, tabName) {
   const color    = avatarColor(e.name);
   const initials = avatarInitials(e.name);
   const { cls, label } = billingStatus(data);
-  const priceLabel = billingPriceLabel(data);
+  const priceLabel    = billingPriceLabel(data);
+  const scheduleLabel = billingScheduleLabel(data);
+  const norm = normalizeBillingData(data);
+  const showMonth = data.cycle === 'annually';
   return `
     <div class="entry-card" data-id="${e.id}">
       <div class="entry-card-top">
@@ -1021,22 +1213,29 @@ function renderBillingItemHTML(e, data, tabName) {
       <div class="billing-info-row">
         <span class="billing-badge ${cls}">${label}</span>
         ${priceLabel ? `<span class="billing-price">${priceLabel}</span>` : ''}
+        <span class="billing-schedule">${scheduleLabel}</span>
       </div>
       <div class="entry-card-actions">
         <button class="btn btn-edit" data-action="billing-edit" data-id="${e.id}">Edit</button>
         <button class="btn btn-del"  data-action="delete" data-id="${e.id}" title="Delete">×</button>
       </div>
       <div class="edit-area" id="edit-${e.id}" style="display:none">
+        <div class="input-group">
+          <label for="edit-billing-cycle-${e.id}">Cycle</label>
+          <select id="edit-billing-cycle-${e.id}">
+            <option value="monthly"  ${data.cycle === 'monthly'  ? 'selected' : ''}>Monthly</option>
+            <option value="annually" ${data.cycle === 'annually' ? 'selected' : ''}>Annually</option>
+          </select>
+        </div>
         <div class="two-col" style="margin-bottom:10px">
           <div class="input-group" style="margin-bottom:0">
-            <label for="edit-billing-date-${e.id}">Renewal date</label>
-            <input type="date" id="edit-billing-date-${e.id}">
+            <label for="edit-billing-day-${e.id}">Renews on (day)</label>
+            <input type="number" min="1" max="31" id="edit-billing-day-${e.id}" value="${norm.day}">
           </div>
-          <div class="input-group" style="margin-bottom:0">
-            <label for="edit-billing-cycle-${e.id}">Cycle</label>
-            <select id="edit-billing-cycle-${e.id}">
-              <option value="monthly">Monthly</option>
-              <option value="annually">Annually</option>
+          <div class="input-group" id="edit-billing-month-wrap-${e.id}" style="margin-bottom:0;display:${showMonth ? '' : 'none'}">
+            <label for="edit-billing-month-${e.id}">Month</label>
+            <select id="edit-billing-month-${e.id}">
+              ${BILLING_MONTH_NAMES.map((m, i) => `<option value="${i + 1}" ${norm.month === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -1326,18 +1525,24 @@ async function handleEntryAction(e) {
     document.querySelectorAll('.edit-area').forEach(el => el.style.display = 'none');
     const all   = await dbGetAll();
     const entry = all.find(e => e.id === id);
-    const data  = JSON.parse(await aesDecrypt(entry.encrypted));
-    $(`edit-billing-date-${id}`).value     = data.renewalDate || '';
-    $(`edit-billing-cycle-${id}`).value    = data.cycle || 'monthly';
+    const data  = normalizeBillingData(JSON.parse(await aesDecrypt(entry.encrypted)));
+    const cycleSel  = $(`edit-billing-cycle-${id}`);
+    const monthWrap = $(`edit-billing-month-wrap-${id}`);
+    cycleSel.value = data.cycle || 'monthly';
+    $(`edit-billing-day-${id}`).value      = data.day;
+    $(`edit-billing-month-${id}`).value    = data.month;
     $(`edit-billing-price-${id}`).value    = data.price ?? '';
     $(`edit-billing-reminder-${id}`).value = data.reminderDays ?? BILLING_REMINDER_DAYS_DEFAULT;
+    monthWrap.style.display = cycleSel.value === 'annually' ? '' : 'none';
+    cycleSel.onchange = () => { monthWrap.style.display = cycleSel.value === 'annually' ? '' : 'none'; };
     editArea.style.display = '';
   }
 
   if (action === 'billing-edit-save') {
-    const date = $(`edit-billing-date-${id}`).value;
-    if (!date) { toast('Renewal date is required', 'err'); return; }
-    const cycle        = $(`edit-billing-cycle-${id}`).value;
+    const cycle = $(`edit-billing-cycle-${id}`).value;
+    const day   = parseInt($(`edit-billing-day-${id}`).value, 10);
+    if (!Number.isFinite(day) || day < 1 || day > 31) { toast('Day must be between 1 and 31', 'err'); return; }
+    const month = cycle === 'annually' ? parseInt($(`edit-billing-month-${id}`).value, 10) : null;
     const price        = parseFloat($(`edit-billing-price-${id}`).value) || 0;
     const reminderDays = parseInt($(`edit-billing-reminder-${id}`).value, 10);
     const saveBtn = document.querySelector(`[data-action="billing-edit-save"][data-id="${id}"]`);
@@ -1346,7 +1551,7 @@ async function handleEntryAction(e) {
       const all   = await dbGetAll();
       const entry = all.find(e => e.id === id);
       entry.encrypted = await aesEncrypt(JSON.stringify({
-        renewalDate: date, cycle, price,
+        day, month, cycle, price,
         reminderDays: Number.isFinite(reminderDays) ? reminderDays : BILLING_REMINDER_DAYS_DEFAULT,
       }));
       entry.updated = Date.now();
@@ -1756,6 +1961,107 @@ async function confirmExport() {
   await exportBackup();
 }
 
+/* ── Generator modal UI ──────────────────────────────── */
+let genLastEnvLine = null;
+
+function wireButtonGroup(containerId, onChange) {
+  const container = $(containerId);
+  if (!container) return;
+  container.addEventListener('click', e => {
+    const btn = e.target.closest('.type-btn');
+    if (!btn || !container.contains(btn)) return;
+    container.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b === btn));
+    onChange?.();
+  });
+}
+
+function groupValue(containerId, fallback) {
+  return $(containerId)?.querySelector('.type-btn.active')?.dataset.val ?? fallback;
+}
+
+function resetGenOutput() {
+  $('gen-output').value = '';
+  $('gen-output-pub').value = '';
+  $('gen-copy-btn').disabled = true;
+  $('gen-copy-pub-btn').disabled = true;
+  $('gen-copy-env-btn').disabled = true;
+  genLastEnvLine = null;
+}
+
+function updateOpensslPreview() {
+  const size = parseInt(groupValue('gen-enc-size', '32'), 10);
+  const encoding = groupValue('gen-enc-encoding', 'hex');
+  $('gen-enc-cmd').textContent = genOpensslPreview(size, encoding);
+}
+
+function openGenerator() {
+  $('generator-overlay').style.display = 'flex';
+  resetGenOutput();
+}
+
+function closeGenerator() {
+  $('generator-overlay').style.display = 'none';
+  resetGenOutput(); // scrub any generated secret sitting in the output box
+}
+
+function switchGenType(genType) {
+  document.querySelectorAll('#gen-type-select .type-btn').forEach(b => b.classList.toggle('active', b.dataset.genType === genType));
+  document.querySelectorAll('.gen-opts').forEach(el => el.style.display = 'none');
+  $(`gen-opts-${genType}`).style.display = '';
+  $('gen-output2-wrap').style.display = genType === 'rsa' ? '' : 'none';
+  $('gen-copy-env-btn').style.display = genType === 'enc' ? '' : 'none';
+  resetGenOutput();
+}
+
+async function runGenerate() {
+  const genType = document.querySelector('#gen-type-select .type-btn.active')?.dataset.genType || 'password';
+  const btn = $('gen-generate-btn');
+  btn.disabled = true; btn.textContent = 'Generating…';
+  try {
+    let output = '', outputPub = null;
+    if (genType === 'password') {
+      const subtype    = groupValue('gen-pw-type', 'passphrase');
+      const complexity = groupValue('gen-pw-complexity', 'simple');
+      if (subtype === 'passphrase') {
+        output = genPassphrase(complexity, groupValue('gen-pw-separator', 'space'), groupValue('gen-pw-digit', 'none'));
+      } else if (subtype === 'chars') {
+        output = genRandomString(genCharsetFor(complexity), GEN_PW_CHARLEN[complexity]);
+      } else if (subtype === 'pin') {
+        output = genRandomString(GEN_CHARSET_DIGITS, GEN_PW_PINLEN[complexity]);
+      } else { // hex
+        output = genHex(rnd(GEN_PW_HEXBYTES[complexity]));
+      }
+    } else if (genType === 'jwt') {
+      const len = parseInt($('gen-jwt-length').value, 10);
+      output = genHex(rnd(Math.ceil(len / 2))).slice(0, len);
+    } else if (genType === 'apikey') {
+      const format = $('gen-apikey-format').value;
+      const len = parseInt($('gen-apikey-length').value, 10);
+      if (format === 'hex') output = genHex(rnd(Math.ceil(len / 2))).slice(0, len);
+      else if (format === 'base64url') { while (output.length < len) output += genBase64Url(rnd(32)); output = output.slice(0, len); }
+      else output = genRandomString(GEN_CHARSET_LOWER + GEN_CHARSET_UPPER + GEN_CHARSET_DIGITS, len);
+    } else if (genType === 'hmac') {
+      output = genEncodedBytes(parseInt($('gen-hmac-size').value, 10), $('gen-hmac-encoding').value);
+    } else if (genType === 'enc') {
+      const size = parseInt(groupValue('gen-enc-size', '32'), 10);
+      output = genEncodedBytes(size, groupValue('gen-enc-encoding', 'hex'));
+      genLastEnvLine = `ENCRYPTION_KEY=${output}`;
+    } else if (genType === 'rsa') {
+      const pair = await genRsaKeyPair(parseInt($('gen-rsa-size').value, 10));
+      output = pair.privatePem;
+      outputPub = pair.publicPem;
+    }
+    $('gen-output').value = output;
+    $('gen-copy-btn').disabled = !output;
+    if (genType === 'rsa') { $('gen-output-pub').value = outputPub; $('gen-copy-pub-btn').disabled = !outputPub; }
+    if (genType === 'enc') $('gen-copy-env-btn').disabled = !genLastEnvLine;
+  } catch (err) {
+    toast('Generate failed: ' + err.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Generate';
+  }
+}
+
 /* ── Change password — always upgrades to PBKDF2 ───── */
 async function changePassword() {
   const np  = $('change-pass-new').value;
@@ -1805,6 +2111,7 @@ async function wipeVault() {
   $('change-pass-new').value = '';
   $('change-pass-confirm').value = '';
   closeExportConfirm(); // scrub any master key staged there and hide the overlay
+  closeGenerator();     // scrub any generated secret sitting in the output box
   $('vault-view').style.display   = 'none';
   $('auth-view').style.display    = '';
   $('sidebar-meta').style.display = 'none';
@@ -2007,8 +2314,10 @@ async function init() {
     }
   });
 
-  /* Sidebar tab nav: switch / rename (double-click) / delete (× on hover) / add */
+  /* Sidebar tab nav: switch / rename (double-click) / favorite (star) / delete (× on hover) / add */
   $('sidebar-tab-nav').addEventListener('click', e => {
+    const favBtn = e.target.closest('[data-action="toggle-favorite"]');
+    if (favBtn) { e.stopPropagation(); toggleTabFavorite(parseInt(favBtn.dataset.tabId, 10)); return; }
     const closeBtn = e.target.closest('[data-action="delete-tab"]');
     if (closeBtn) { e.stopPropagation(); deleteTabById(parseInt(closeBtn.dataset.tabId, 10)); return; }
     const tabEl = e.target.closest('.tab-custom');
@@ -2058,7 +2367,7 @@ async function init() {
   /* Add-entry panel toggle + type selector */
   $('add-entry-btn').addEventListener('click', () => toggleAddPanel());
   $('cancel-add-btn').addEventListener('click', () => toggleAddPanel(false));
-  document.querySelectorAll('.type-btn').forEach(b =>
+  $('type-select').querySelectorAll('.type-btn').forEach(b =>
     b.addEventListener('click', () => setAddType(b.dataset.type))
   );
 
@@ -2069,6 +2378,12 @@ async function init() {
     const coin = $('n-crypto-coin').value;
     updateCryptoMemoField(coin, $('n-crypto-memo-wrap'), $('n-crypto-memo-label'));
     updateCryptoHint(coin, $('n-crypto-hint'));
+  });
+
+  /* Billing cycle: the month field only matters (and is only shown) for an annual bill */
+  $('n-billing-month').innerHTML = BILLING_MONTH_NAMES.map((m, i) => `<option value="${i + 1}">${m}</option>`).join('');
+  $('n-billing-cycle').addEventListener('change', () => {
+    $('n-billing-month-wrap').style.display = $('n-billing-cycle').value === 'annually' ? '' : 'none';
   });
 
   /* Grid / list view toggle */
@@ -2102,13 +2417,14 @@ async function init() {
       if (!newAttachmentFile) { toast('Choose a file first', 'err'); return; }
       await addFileEntry(name, tag, curTabId, newAttachmentFile);
     } else if (curAddType === 'billing') {
-      const renewalDate = $('n-billing-date').value;
-      if (!renewalDate) { toast('Renewal date is required', 'err'); return; }
-      const cycle        = $('n-billing-cycle').value;
+      const cycle = $('n-billing-cycle').value;
+      const day   = parseInt($('n-billing-day').value, 10);
+      if (!Number.isFinite(day) || day < 1 || day > 31) { toast('Day must be between 1 and 31', 'err'); return; }
+      const month = cycle === 'annually' ? parseInt($('n-billing-month').value, 10) : null;
       const price        = parseFloat($('n-billing-price').value) || 0;
       const reminderDays = parseInt($('n-billing-reminder').value, 10);
       await addEntry(name, JSON.stringify({
-        renewalDate, cycle, price,
+        day, month, cycle, price,
         reminderDays: Number.isFinite(reminderDays) ? reminderDays : BILLING_REMINDER_DAYS_DEFAULT,
       }), tag, 'billing', curTabId);
     } else if (curAddType === 'crypto') {
@@ -2187,6 +2503,33 @@ async function init() {
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && $('export-confirm-overlay').style.display !== 'none') closeExportConfirm();
   });
+
+  /* Generator modal */
+  $('open-generator-btn').addEventListener('click', openGenerator);
+  $('generator-close-btn').addEventListener('click', closeGenerator);
+  $('generator-overlay').addEventListener('click', e => {
+    if (e.target === e.currentTarget) closeGenerator();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && $('generator-overlay').style.display !== 'none') closeGenerator();
+  });
+  $('gen-type-select').addEventListener('click', e => {
+    const btn = e.target.closest('.type-btn');
+    if (btn) switchGenType(btn.dataset.genType);
+  });
+  wireButtonGroup('gen-pw-type', () => {
+    $('gen-pw-passphrase-opts').style.display = groupValue('gen-pw-type', 'passphrase') === 'passphrase' ? '' : 'none';
+  });
+  wireButtonGroup('gen-pw-complexity');
+  wireButtonGroup('gen-pw-separator');
+  wireButtonGroup('gen-pw-digit');
+  wireButtonGroup('gen-enc-size', updateOpensslPreview);
+  wireButtonGroup('gen-enc-encoding', updateOpensslPreview);
+  $('gen-generate-btn').addEventListener('click', runGenerate);
+  $('gen-copy-btn').addEventListener('click', async () => { await copyToClipboard($('gen-output').value); toast('Copied to clipboard', 'ok'); });
+  $('gen-copy-pub-btn').addEventListener('click', async () => { await copyToClipboard($('gen-output-pub').value); toast('Public key copied', 'ok'); });
+  $('gen-copy-env-btn').addEventListener('click', async () => { if (genLastEnvLine) { await copyToClipboard(genLastEnvLine); toast('.env line copied', 'ok'); } });
+  updateOpensslPreview();
 
   document.addEventListener('keydown', resetLock);
   document.addEventListener('click',   resetLock);
